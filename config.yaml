@@ -1,0 +1,143 @@
+# 什么值得买好价监控配置文件
+
+# 监控设置
+monitor:
+  # 抓取间隔（秒）
+  interval: 1800
+  # 每页商品数量
+  items_per_page: 20
+  # 最大扫描页数
+  max_pages: 50
+  # 扫描时间范围（小时）
+  max_history_hours: 24
+  # 频道类型：faxian(发现), youhui(优惠), haojia(好价)
+  channel_types:
+    - faxian
+    - youhui
+
+# 评分权重配置
+scorer:
+  weights:
+    historical_low: 0.4    # 历史低价权重
+    comment_growth: 0.3    # 评论增速权重
+    popularity: 0.3        # 热度权重
+  
+  # 基础门槛
+  min_total_engagement: 15  # 评论+收藏+值 >= 15
+  min_composite_score: 45   # 综合评分阈值
+  min_score_rate: 70        # 好评率 >= 70%
+
+# 过滤规则配置
+filter:
+  # 黑名单关键词（包含这些词的商品会被过滤）
+  blacklist_keywords:
+    - "拼多多"
+    - "pdd"
+    - "百亿补贴"
+  
+  # 黑名单商品ID（精确匹配）
+  blacklist_ids: []
+  
+  # 黑名单店铺（精确匹配）
+  blacklist_malls: []
+  
+  # 黑名单品类
+  blacklist_categories: []
+  
+  # 白名单优先级（高于黑名单）
+  whitelist_keywords: []
+  whitelist_ids: []
+
+# 代理配置
+proxy:
+  # 是否启用代理
+  enabled: true
+  # 代理源类型：free(免费), api(付费API)
+  source: "free"
+  
+  # 免费代理源
+  free_sources:
+    - "https://proxylist.geonode.com/api/proxy-list?limit=100&page=1&sort_by=lastChecked&sort_type=desc&protocols=socks5,http&country=CN"
+    - "https://www.proxy-list.download/api/v1/get?type=http"
+  
+  # 付费代理API（可选）
+  api_url: ""
+  api_key: ""
+  
+  # 代理验证设置
+  validation:
+    enabled: true
+    test_url: "https://httpbin.org/ip"
+    timeout: 10
+  
+  # 代理轮换策略
+  rotation:
+    # 每次请求后轮换
+    on_request: true
+    # 失败后自动切换
+    on_failure: true
+    # 最大失败次数
+    max_failures: 3
+
+# 提醒配置
+notifier:
+  # 邮件配置
+  email:
+    enabled: true
+    smtp_server: "smtp.qq.com"
+    smtp_port: 587
+    use_tls: true
+    username: ""
+    password: ""
+    from_name: "SRZDM监控"
+    to_email: ""
+  
+  # 提醒限制
+  limits:
+    # 同一商品最多提醒次数
+    max_notifications_per_item: 2
+    # 每次最多提醒商品数
+    max_items_per_batch: 20
+  
+  # 邮件模板
+  template: "default"
+
+# 反馈服务配置
+feedback:
+  # 是否启用反馈服务
+  enabled: true
+  # 反馈服务端口
+  port: 5000
+  # 反馈按钮URL（用于邮件中）
+  base_url: "http://localhost:5000"
+  
+  # 学习参数
+  learning:
+    # 反馈权重调整系数
+    adjustment_factor: 0.1
+    # 最小反馈次数才调整
+    min_feedback_count: 5
+
+# 数据库配置
+storage:
+  # 数据库路径
+  db_path: "./data/smzdm.db"
+  
+  # 数据保留天数
+  retention_days: 30
+  
+  # 自动清理
+  auto_cleanup: true
+
+# 日志配置
+logging:
+  # 日志级别：DEBUG, INFO, WARNING, ERROR
+  level: "INFO"
+  # 日志文件路径
+  file: "./logs/smzdm.log"
+  # 是否输出到控制台
+  console: true
+  # 日志文件大小限制（MB）
+  max_size: 10
+  # 保留日志文件数
+  backup_count: 5

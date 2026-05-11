@@ -4,11 +4,10 @@
 通过 IMAP 轮询 QQ 邮箱，解析用户回复的反馈邮件。
 
 支持格式:
-  1. 批量: subject = feedback:batch:id1,id2,id3:good|bad
-  2. 详细: subject = feedback:detail:id1,id2,... 
-           body 包含 "好评 1,3,5" 或 "好评：1,3,5"（编号对应邮件中的商品顺序）
-  3. 自由回复: subject 包含 "反馈" 关键词
-           body 包含 "好评 1,2" "差评 3" 等
+  1. 按钮反馈: subject = 反馈:batchId:good|bad
+  2. 按钮详细: subject = 反馈:batchId:detail + body 编号
+  3. 直接回复: subject = 回复：【SMZDM好价】... + body 编号
+  4. 自由回复: subject 包含"反馈" + body 编号
 """
 import imaplib
 import email
@@ -16,10 +15,14 @@ import json
 from email.header import decode_header
 import logging
 import re
+import os
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional
 
 logger = logging.getLogger(__name__)
+
+DATA_DIR = './data'
+BATCH_FILE = os.path.join(DATA_DIR, 'batch_history.json')
 
 
 class FeedbackParser:
@@ -81,23 +84,33 @@ class FeedbackParser:
                     self._processed_uids.add(msg_id)
                     continue
                 
-                # 1. 尝试批量格式: feedback:batch:ids:good|bad
-                parsed = self._parse_batch_subject(subject)
-                if parsed:
-                    feedbacks.append(parsed)
-                    logger.info(f"解析到批量反馈: {parsed}")
-                    self._processed_uids.add(msg_id)
-                    continue
+                parsed = None
                 
-                # 2. 尝试详细格式: feedback:detail:ids + body
-                parsed = self._parse_detail(subject, body)
+                # 1. 按钮批量: 反馈:batchId:good|bad
+                parsed = self._parse_batch_feedback(subject, body)
                 if parsed:
                     feedbacks.extend(parsed)
-                    logger.info(f"解析到详细反馈: {len(parsed)} 条")
+                    logger.info(f"解析到按钮批量反馈: {len(parsed)} 条")
                     self._processed_uids.add(msg_id)
                     continue
                 
-                # 3. 自由回复: subject 包含"反馈" + body 解析编号
+                # 2. 按钮详细: 反馈:batchId:detail
+                parsed = self._parse_detail_feedback(subject, body)
+                if parsed:
+                    feedbacks.extend(parsed)
+                    logger.info(f"解析到按钮详细反馈: {len(parsed)} 条")
+                    self._processed_uids.add(msg_id)
+                    continue
+                
+                # 3. 直接回复原邮件: 回复：【SMZDM好价】...
+                parsed = self._parse_reply_feedback(subject, body)
+                if parsed:
+                    feedbacks.extend(parsed)
+                    logger.info(f"解析到直接回复反馈: {len(parsed)} 条")
+                    self._processed_uids.add(msg_id)
+                    continue
+                
+                # 4. 自由回复: subject 包含"反馈"
                 if '反馈' in subject:
                     parsed = self._parse_free_reply(body)
                     if parsed:
@@ -152,57 +165,128 @@ class FeedbackParser:
                 body = payload.decode('utf-8', errors='replace')
         return body
     
-    def _parse_batch_subject(self, subject: str) -> Optional[Dict]:
-        """解析批量反馈: feedback:batch:id1,id2,id3:good|bad"""
-        pattern = r'feedback:batch:([^:]+):(good|bad)'
-        match = re.search(pattern, subject, re.IGNORECASE)
-        if not match:
-            return None
-        
-        ids_str = match.group(1)
-        feedback_type = match.group(2).lower()
-        
-        product_ids = [pid.strip() for pid in ids_str.split(',') if pid.strip()]
-        if not product_ids:
-            return None
-        
-        type_map = {'good': 'helpful', 'bad': 'not_helpful'}
-        
-        return {
-            'product_ids': product_ids,
-            'feedback_type': type_map.get(feedback_type, feedback_type),
-            'timestamp': datetime.now().isoformat(),
-        }
+    def _load_batch(self, batch_id: str) -> List[str]:
+        """加载批次对应的商品ID列表"""
+        try:
+            with open(BATCH_FILE, 'r', encoding='utf-8') as f:
+                history = json.load(f)
+            batch = history.get(batch_id, [])
+            return [item['id'] for item in batch]
+        except (FileNotFoundError, json.JSONDecodeError):
+            return []
     
-    def _parse_detail(self, subject: str, body: str) -> List[Dict]:
-        """解析详细反馈: feedback:detail:id1,id2,... + body 中的编号"""
-        pattern = r'feedback:detail:([^:\s]+)'
+    def _load_latest_batch(self) -> List[str]:
+        """加载最近一次发送的商品ID列表"""
+        try:
+            with open(BATCH_FILE, 'r', encoding='utf-8') as f:
+                history = json.load(f)
+            if not history:
+                return []
+            latest_key = list(history.keys())[-1]
+            return [item['id'] for item in history[latest_key]]
+        except (FileNotFoundError, json.JSONDecodeError):
+            return []
+    
+    def _match_batch_by_subject(self, subject: str) -> List[str]:
+        """通过主题中的关键词匹配批次
+        
+        回复的主题格式: 回复：【SMZDM好价】AirPods ,罗技 G913 ,小米 Buds  | 3件 - 05-11 09:38
+        需要从 batch_history.json 中找到匹配的批次
+        """
+        # 提取商品关键词（去掉"回复：【SMZDM好价】"前缀和时间后缀）
+        clean = re.sub(r'^回复[：:]?\s*【?SMZDM好价】?\s*', '', subject)
+        clean = re.sub(r'\|\s*\d+件\s*-\s*\d{2}-\d{2}\s*\d{2}:\d{2}\s*$', '', clean)
+        clean = clean.strip()
+        
+        if not clean:
+            return []
+        
+        # 从 batch_history 中匹配
+        try:
+            with open(BATCH_FILE, 'r', encoding='utf-8') as f:
+                history = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            return []
+        
+        # 提取关键词（取前几个字符做匹配）
+        keywords = [kw.strip() for kw in clean.split(',') if kw.strip()]
+        
+        best_match = None
+        best_score = 0
+        
+        for batch_id, products in history.items():
+            titles = [p.get('title', '') for p in products]
+            score = 0
+            for kw in keywords:
+                for title in titles:
+                    if kw[:6] in title:  # 用前6个字符匹配
+                        score += 1
+                        break
+            if score > best_score:
+                best_score = score
+                best_match = batch_id
+        
+        if best_match and best_score > 0:
+            return [item['id'] for item in history[best_match]]
+        
+        return []
+    
+    def _parse_batch_feedback(self, subject: str, body: str) -> List[Dict]:
+        """解析按钮批量反馈: 反馈:batchId:good|bad"""
+        pattern = r'反馈[:：]([\w\-]+)[:：](good|bad)'
         match = re.search(pattern, subject, re.IGNORECASE)
         if not match:
             return []
         
-        ids_str = match.group(1)
-        all_ids = [pid.strip() for pid in ids_str.split(',') if pid.strip()]
+        batch_id = match.group(1)
+        feedback_type = match.group(2).lower()
+        
+        all_ids = self._load_batch(batch_id)
         if not all_ids:
+            logger.warning(f"找不到批次 {batch_id} 的商品列表")
+            return []
+        
+        type_map = {'good': 'helpful', 'bad': 'not_helpful'}
+        fb_type = type_map.get(feedback_type, feedback_type)
+        
+        return [{
+            'product_id': pid,
+            'feedback_type': fb_type,
+            'timestamp': datetime.now().isoformat(),
+        } for pid in all_ids]
+    
+    def _parse_detail_feedback(self, subject: str, body: str) -> List[Dict]:
+        """解析按钮详细反馈: 反馈:batchId:detail"""
+        pattern = r'反馈[:：]([\w\-]+)[:：]detail'
+        match = re.search(pattern, subject, re.IGNORECASE)
+        if not match:
+            return []
+        
+        batch_id = match.group(1)
+        all_ids = self._load_batch(batch_id)
+        if not all_ids:
+            logger.warning(f"找不到批次 {batch_id} 的商品列表")
+            return []
+        
+        return self._parse_numbered_feedback(body, all_ids)
+    
+    def _parse_reply_feedback(self, subject: str, body: str) -> List[Dict]:
+        """解析直接回复原邮件: 回复：【SMZDM好价】..."""
+        if '回复' not in subject and 'Re:' not in subject and 'RE:' not in subject:
+            return []
+        
+        # 通过主题匹配批次
+        all_ids = self._match_batch_by_subject(subject)
+        if not all_ids:
+            logger.warning(f"无法通过主题匹配批次: {subject}")
             return []
         
         return self._parse_numbered_feedback(body, all_ids)
     
     def _parse_free_reply(self, body: str) -> List[Dict]:
-        """解析自由回复格式
-        
-        body 示例:
-            好评 1,2 差评 3
-            好评：1,3
-            差评：2,4
-        """
-        # 加载最近一次发送的商品列表
-        try:
-            with open('./data/last_sent_products.json', 'r', encoding='utf-8') as f:
-                last_sent = json.load(f)
-            all_ids = [item['id'] for item in last_sent]
-        except (FileNotFoundError, json.JSONDecodeError):
-            logger.warning("无法加载最近发送的商品列表，跳过自由回复解析")
+        """解析自由回复"""
+        all_ids = self._load_latest_batch()
+        if not all_ids:
             return []
         
         return self._parse_numbered_feedback(body, all_ids)
@@ -210,15 +294,10 @@ class FeedbackParser:
     def _parse_numbered_feedback(self, body: str, all_ids: List[str]) -> List[Dict]:
         """从 body 中解析编号反馈
         
-        支持格式:
-            好评 1,3,5
-            好评：1,3,5
-            差评 2,4
-            差评：2,4
+        支持: 好评 1,3 / 好评：1,3 / 差评 2,4
         """
-        # 支持有无冒号
-        good_indices = self._extract_indices(body, r'好评[：: ]*\s*([\d,\s]+)')
-        bad_indices = self._extract_indices(body, r'差评[：: ]*\s*([\d,\s]+)')
+        good_indices = self._extract_indices(body, r'好评[：: ]*\s*([\d,\s，]+)')
+        bad_indices = self._extract_indices(body, r'差评[：: ]*\s*([\d,\s，]+)')
         
         if not good_indices and not bad_indices:
             return []

@@ -4,6 +4,7 @@
 import smtplib
 import json
 import logging
+import os
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from typing import List, Dict, Optional
@@ -11,8 +12,8 @@ from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
-# 最近一次发送的商品列表（用于解析自由回复中的编号）
-LAST_SENT_FILE = './data/last_sent_products.json'
+DATA_DIR = './data'
+BATCH_FILE = os.path.join(DATA_DIR, 'batch_history.json')
 
 
 class EmailNotifier:
@@ -37,26 +38,53 @@ class EmailNotifier:
         if not products:
             return False
         
-        subject = f"【SMZDM好价】{len(products)} 个热门商品 - {datetime.now().strftime('%m-%d %H:%M')}"
-        html_content = self._build_html(products, feedback_email)
+        # 生成批次ID（时间戳后4位 + 商品数）
+        batch_id = datetime.now().strftime('%m%d%H%M') + f'-{len(products)}'
         
-        # 保存商品列表（用于自由回复解析）
-        self._save_last_sent(products)
+        # 主题：带商品简称
+        short_titles = self._get_short_titles(products)
+        subject = f"【SMZDM好价】{short_titles} | {len(products)}件 - {datetime.now().strftime('%m-%d %H:%M')}"
+        
+        html_content = self._build_html(products, feedback_email, batch_id)
+        
+        # 保存批次信息
+        self._save_batch(batch_id, products)
         
         return self._send_email(subject, html_content)
     
-    def _save_last_sent(self, products: List[Dict]):
-        """保存最近发送的商品列表"""
-        import os
-        os.makedirs('./data', exist_ok=True)
-        data = [{
+    def _get_short_titles(self, products: List[Dict], max_len: int = 30) -> str:
+        """获取商品简称（截断到合适长度）"""
+        titles = [p.get('title', '?')[:8] for p in products[:5]]
+        result = ','.join(titles)
+        if len(result) > max_len:
+            result = result[:max_len] + '...'
+        return result
+    
+    def _save_batch(self, batch_id: str, products: List[Dict]):
+        """保存批次信息"""
+        os.makedirs(DATA_DIR, exist_ok=True)
+        
+        # 加载历史
+        history = {}
+        if os.path.exists(BATCH_FILE):
+            with open(BATCH_FILE, 'r', encoding='utf-8') as f:
+                history = json.load(f)
+        
+        # 保留最近 20 个批次
+        if len(history) > 20:
+            keys = list(history.keys())
+            for k in keys[:len(keys) - 20]:
+                del history[k]
+        
+        history[batch_id] = [{
             'id': p.get('id', ''),
             'title': p.get('title', ''),
         } for p in products]
-        with open(LAST_SENT_FILE, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+        
+        with open(BATCH_FILE, 'w', encoding='utf-8') as f:
+            json.dump(history, f, ensure_ascii=False, indent=2)
     
-    def _build_html(self, products: List[Dict], feedback_email: str = None) -> str:
+    def _build_html(self, products: List[Dict], feedback_email: str = None, batch_id: str = '') -> str:
         """构建HTML邮件内容"""
         all_ids = ','.join([p.get('id', '') for p in products])
         
@@ -145,7 +173,6 @@ class EmailNotifier:
                 for i, p in enumerate(products, 1)
             ])
             
-            # 回复模板：用户只需填写编号，body 里带标题映射
             reply_body_lines = [f'{i}. {p.get("title", "?")}' for i, p in enumerate(products, 1)]
             reply_body = '%0A'.join(reply_body_lines) + '%0A%0A好评：' + ','.join(str(i) for i in range(1, len(products)+1)) + '%0A差评：'
             
@@ -156,15 +183,15 @@ class EmailNotifier:
             <p>整体反馈点下面，具体反馈往下翻</p>
             
             <div class="feedback-batch">
-                <a href="mailto:{feedback_email}?subject=feedback:batch:{all_ids}:good&body=这批推荐不错" class="fb fb-good">👍 都不错</a>
-                <a href="mailto:{feedback_email}?subject=feedback:batch:{all_ids}:bad&body=这批推荐不行" class="fb fb-bad">👎 都不行</a>
+                <a href="mailto:{feedback_email}?subject=反馈:{batch_id}:good&body=这批推荐不错" class="fb fb-good">👍 都不错</a>
+                <a href="mailto:{feedback_email}?subject=反馈:{batch_id}:bad&body=这批推荐不行" class="fb fb-bad">👎 都不行</a>
             </div>
             
             <div class="feedback-detail">
                 <p><b>📝 具体反馈</b> — 点击下方按钮，编辑编号后发送：</p>
                 <ol>{mapping_lines}</ol>
                 <p>回复格式：<code>好评 1,3,5</code> &nbsp; <code>差评 2,4</code></p>
-                <a href="mailto:{feedback_email}?subject=feedback:detail:{all_ids}&body={reply_body}" class="fb-reply">✏️ 回复反馈</a>
+                <a href="mailto:{feedback_email}?subject=反馈:{batch_id}:detail&body={reply_body}" class="fb-reply">✏️ 回复反馈</a>
             </div>
         </div>
 """

@@ -42,3 +42,8 @@ Thumbs.db
 # 临时文件
 *.tmp
 *.bak
+
+# 敏感配置（含密钥、授权码等）
+config.yaml
+.env
+*.env

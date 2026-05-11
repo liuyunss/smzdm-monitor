@@ -87,10 +87,10 @@ notifier:
     smtp_server: "smtp.qq.com"
     smtp_port: 587
     use_tls: true
-    username: "809153781@qq.com"
-    password: "uxlbtpbgngolbejj"
+    username: ""
+    password: ""
     from_name: "SRZDM监控"
-    to_email: "809153781@qq.com"
+    to_email: ""
   
   # 提醒限制
   limits:

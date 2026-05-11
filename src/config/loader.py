@@ -1,9 +1,18 @@
 """
 配置加载模块
+支持 config.yaml + 环境变量覆盖 + .env 文件
 """
 import os
 import yaml
 from typing import Dict, Any
+
+try:
+    from dotenv import load_dotenv
+    # 加载 .env 文件（不覆盖已有环境变量）
+    load_dotenv(override=False)
+except ImportError:
+    pass
+
 
 class ConfigLoader:
     """配置加载器"""
@@ -25,19 +34,19 @@ class ConfigLoader:
         self._env_override()
     
     def _env_override(self):
-        """环境变量覆盖配置"""
+        """环境变量覆盖配置（优先级高于 config.yaml）"""
         env_map = {
-            'SRZDM_EMAIL_USERNAME': ('notifier', 'email', 'username'),
-            'SRZDM_EMAIL_PASSWORD': ('notifier', 'email', 'password'),
-            'SRZDM_EMAIL_TO': ('notifier', 'email', 'to_email'),
-            'SRZDM_DB_PATH': ('storage', 'db_path'),
-            'SRZDM_PROXY_API_KEY': ('proxy', 'api_key'),
+            'SMZDM_EMAIL_USERNAME': ('notifier', 'email', 'username'),
+            'SMZDM_EMAIL_PASSWORD': ('notifier', 'email', 'password'),
+            'SMZDM_EMAIL_TO': ('notifier', 'email', 'to_email'),
+            'SMZDM_DB_PATH': ('storage', 'db_path'),
+            'SMZDM_PROXY_API_KEY': ('proxy', 'api_key'),
         }
         
-        for env_key, config_path in env_map.items():
+        for env_key, cfg_path in env_map.items():
             value = os.environ.get(env_key)
             if value:
-                self._set_nested(config_path, value)
+                self._set_nested(cfg_path, value)
     
     def _set_nested(self, keys: tuple, value: Any):
         """设置嵌套配置值"""
@@ -68,6 +77,7 @@ class ConfigLoader:
     def __getitem__(self, keys):
         """支持 dict['key1']['key2'] 方式访问"""
         return self.get(*keys) if isinstance(keys, tuple) else self.config.get(keys)
+
 
 # 全局配置实例
 _config_instance = None

@@ -61,7 +61,7 @@ class SmzdmCrawler:
             # API 返回格式: {data: {rows: [...], total_num: ...}}
             rows = data.get('data', {}).get('rows', [])
             if not rows:
-                logger.warning(f"无数据: {api_url}")
+                logger.info(f"无数据: {api_url}")
                 return None
             
             products = []
@@ -84,7 +84,10 @@ class SmzdmCrawler:
         try:
             article_id = item.get('article_id')
             title = item.get('article_title', '').strip()
-            price = item.get('article_price', '').strip()
+            # 提取纯数字价格（去掉'元'、'（需用券）'等后缀）
+            raw_price = item.get('article_price', '').strip()
+            price_match = re.search(r'[\d,.]+', raw_price)
+            price = price_match.group() if price_match else raw_price
             mall = item.get('article_mall', '').strip()
             url = item.get('article_url', '').strip()
             channel_type = item.get('article_channel_type', '').strip()

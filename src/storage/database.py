@@ -54,10 +54,17 @@ class Database:
                     worthy INTEGER DEFAULT 0,
                     unworthy INTEGER DEFAULT 0,
                     score REAL DEFAULT 0,
+                    category TEXT DEFAULT '',
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
+            
+            # 兼容旧数据库：添加 category 列
+            try:
+                cursor.execute('ALTER TABLE products ADD COLUMN category TEXT DEFAULT ""')
+            except Exception:
+                pass  # 列已存在
             
             # 价格历史表
             cursor.execute('''
@@ -131,8 +138,8 @@ class Database:
             cursor = conn.cursor()
             cursor.execute('''
                 INSERT OR REPLACE INTO products 
-                (id, title, price, mall, url, channel_type, comments, collection, worthy, unworthy, score, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                (id, title, price, mall, url, channel_type, comments, collection, worthy, unworthy, score, category, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             ''', (
                 product['id'],
                 product['title'],
@@ -144,7 +151,8 @@ class Database:
                 product.get('collection', 0),
                 product.get('worthy', 0),
                 product.get('unworthy', 0),
-                product.get('score', 0)
+                product.get('score', 0),
+                product.get('category', '')
             ))
             
             # 记录价格历史

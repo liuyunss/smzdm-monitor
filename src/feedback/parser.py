@@ -44,7 +44,7 @@ class FeedbackParser:
     def check_and_parse(self) -> List[Dict]:
         """检查邮箱并解析反馈"""
         if not self.username or not self.password:
-            logger.warning("邮件配置不完整，跳过反馈检查")
+            logger.error("邮件配置不完整，跳过反馈检查")
             return []
         
         feedbacks = []
@@ -63,7 +63,7 @@ class FeedbackParser:
                 return []
             
             msg_ids = messages[0].split()
-            logger.info(f"找到 {len(msg_ids)} 封最近邮件")
+            logger.debug(f"找到 {len(msg_ids)} 封最近邮件")
             
             for msg_id in msg_ids:
                 if msg_id in self._processed_uids:
@@ -102,8 +102,15 @@ class FeedbackParser:
             # 写入反馈
             if self.db and feedbacks:
                 for fb in feedbacks:
-                    self.db.save_feedback(fb['product_id'], fb['feedback_type'])
-                    logger.info(f"记录反馈: {fb['product_id']} -> {fb['feedback_type']}")
+                    # 从商品标题推断品类
+                    category = None
+                    product = self.db.get_product(fb['product_id'])
+                    if product:
+                        from src.scorer.category import tag_category
+                        category = tag_category(product.get('title', ''))
+                    self.db.save_feedback(fb['product_id'], fb['feedback_type'], category)
+                    fb['category'] = category
+                    logger.info(f"记录反馈: {fb['product_id']} -> {fb['feedback_type']} ({category})")
             
             # 写入设置
             if self.db and settings:
@@ -119,7 +126,7 @@ class FeedbackParser:
     
     def _parse(self, subject: str, body: str) -> List[Dict]:
         """从主题提取编号→ID映射，从正文提取反馈"""
-        id_map = self._extract_id_map(subject)
+        id_map = self._extract_id_map(subject, body)
         if not id_map:
             return []
         
@@ -178,8 +185,8 @@ class FeedbackParser:
             })
         return results
     
-    def _extract_id_map(self, subject: str) -> Dict[int, str]:
-        """从主题提取编号→商品ID映射"""
+    def _extract_id_map(self, subject: str, body: str = '') -> Dict[int, str]:
+        """从主题或正文提取编号→商品ID映射"""
         # 方式1: 按钮格式
         btn_match = re.search(r'反馈[:：]([^:：\s]+)', subject)
         if btn_match:
@@ -187,10 +194,24 @@ class FeedbackParser:
             ids = [x.strip() for x in ids_str.split(',') if x.strip()]
             return {i+1: pid for i, pid in enumerate(ids)}
         
-        # 方式2: 编号:商品ID(简称) 格式
+        # 方式2: 编号:商品ID(简称) 格式（兼容旧格式）
         pairs = re.findall(r'(\d+):(\d+)\([^)]*\)', subject)
         if pairs:
             return {int(num): pid for num, pid in pairs}
+        
+        # 方式3: 编号:商品ID 格式（新格式，无括号）
+        pairs = re.findall(r'(\d+):(\d+)', subject)
+        if pairs:
+            return {int(num): pid for num, pid in pairs}
+        
+        # 方式4: 从正文查找映射行（回复时原文被引用）
+        if body:
+            mapping_match = re.search(r'商品编号[：:]\s*(.+)', body)
+            if mapping_match:
+                mapping_str = mapping_match.group(1)
+                pairs = re.findall(r'(\d+):(\d+)', mapping_str)
+                if pairs:
+                    return {int(num): pid for num, pid in pairs}
         
         return {}
     

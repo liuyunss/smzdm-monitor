@@ -30,9 +30,9 @@ class EmailNotifier:
         if not products:
             return False
         
-        # 主题：编号:商品ID(简称)
+        # 主题：简洁格式（编号:商品ID，不含名字）
         subject_items = ','.join([
-            f'{i}:{p.get("id","?")}({p.get("title", "?")[:5]})'
+            f'{i}:{p.get("id","?")}'
             for i, p in enumerate(products, 1)
         ])
         subject = f"【SMZDM好价】{subject_items} - {datetime.now().strftime('%m-%d %H:%M')}"
@@ -157,6 +157,7 @@ class EmailNotifier:
         </div>
         <div class="footer">
             <p>📊 由 SMZDM 好价监控系统自动发送 | {datetime.now().strftime('%Y-%m-%d %H:%M')}</p>
+            <p style="color:#ccc;font-size:10px;">商品编号: {','.join(f'{i}:{p.get("id","?")}' for i, p in enumerate(products, 1))}</p>
         </div>
     </div>
 </body>
@@ -167,7 +168,7 @@ class EmailNotifier:
     
     def _send_email(self, subject: str, html_content: str) -> bool:
         if not self.username or not self.password or not self.to_email:
-            logger.warning("邮件配置不完整，跳过发送")
+            logger.error("邮件配置不完整，跳过发送")
             return False
         
         try:
@@ -185,7 +186,7 @@ class EmailNotifier:
             server.sendmail(self.username, [self.to_email], msg.as_string())
             server.quit()
             
-            logger.info(f"邮件发送成功: {subject}")
+            logger.info(f"邮件发送成功: {len(subject)} 字符")
             return True
             
         except Exception as e:

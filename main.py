@@ -12,6 +12,7 @@ import signal
 import logging
 import argparse
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -36,6 +37,20 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger(__name__)
+
+def is_quiet_hours(config) -> bool:
+    """检查当前是否在免打扰时段（北京时间）"""
+    quiet = config.get('monitor', 'quiet_hours', default=None) or {}
+    if not quiet.get('enabled', False):
+        return False
+    now = datetime.now(ZoneInfo('Asia/Shanghai'))
+    current = now.strftime('%H:%M')
+    start = quiet.get('start', '00:30')
+    end = quiet.get('end', '07:30')
+    if start <= end:
+        return start <= current <= end
+    else:  # 跨午夜，如 23:00 ~ 06:00
+        return current >= start or current <= end
 
 # 优雅退出
 _running = True
@@ -136,8 +151,8 @@ def run_monitor():
 
         logger.info(f"筛选出 {len(scored_products)} 个高分商品")
 
-        # 发送通知
-        if scored_products:
+        # 发送通知（免打扰时段跳过）
+        if scored_products and not is_quiet_hours(config):
             scored_products.sort(key=lambda x: x.get('score', 0), reverse=True)
             max_items = config.get('notifier', 'limits', 'max_items_per_batch', default=20)
             scored_products = scored_products[:max_items]

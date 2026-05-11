@@ -207,8 +207,10 @@ def run_monitor():
         # 发送通知
         if scored_products:
             scored_products.sort(key=lambda x: x.get('score', 0), reverse=True)
-            max_items = config.get('notifier', 'limits', 'max_items_per_batch', default=20)
-            scored_products = scored_products[:max_items]
+            # 免打扰批量推送不受限制，正常轮次限制 max_items
+            if not quiet:
+                max_items = config.get('notifier', 'limits', 'max_items_per_batch', default=20)
+                scored_products = scored_products[:max_items]
 
             success = notifier.send_notification(scored_products)
             if success:

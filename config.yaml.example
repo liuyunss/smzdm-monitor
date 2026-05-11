@@ -36,6 +36,8 @@ proxy:
   enabled: false
 
 scorer:
+  filters:
+    min_worthy: 15  # 值≥此数才评分（核心门槛）
   min_age_hours: 1
   min_composite_score: 50
   weights:

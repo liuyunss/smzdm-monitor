@@ -21,6 +21,7 @@ class Scorer:
         self.config = config
         self.category_pref = category_pref
         self._load_config()
+        self._load_filters()
     
     def _load_config(self):
         """加载评分配置"""
@@ -33,6 +34,10 @@ class Scorer:
         
         self.min_age_hours = self.config.get('min_age_hours', 1)
         self.scale = self.config.get('scale', 14) if self.config else 14
+    
+    def _load_filters(self):
+        filters = self.config.get('filters', {}) if self.config else {}
+        self.min_worthy = filters.get('min_worthy', 15)
     
     def calculate_score(self, product: Dict, price_history: List[Dict] = None) -> float:
         """计算商品综合评分（含品类偏好加权）"""
@@ -70,9 +75,8 @@ class Scorer:
         worthy = product.get('worthy', 0)
         unworthy = product.get('unworthy', 0)
 
-        # 最低互动门槛（只看收藏+值，评论数据不可靠）
-        total_engage = collection + worthy
-        if total_engage < 15:
+        # 最低门槛：只看值（核心正向信号）
+        if worthy < self.min_worthy:
             return 0
 
         # 值是核心正向信号，值比收藏或评论低说明有问题

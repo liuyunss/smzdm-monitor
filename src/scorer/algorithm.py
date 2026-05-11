@@ -62,12 +62,19 @@ class Scorer:
         return round(base_score, 2)
     
     def _calc_engagement_score(self, product: Dict) -> float:
-        """计算互动量得分（0-100）"""
+        """计算互动量得分（0-100）
+        总互动<10 直接返回0（互动太少不可靠）
+        """
         comments = product.get('comments', 0)
         collection = product.get('collection', 0)
         worthy = product.get('worthy', 0)
         unworthy = product.get('unworthy', 0)
-        
+
+        # 最低互动门槛
+        total_engage = comments + collection + worthy
+        if total_engage < 10:
+            return 0
+
         # 加权互动值
         value = (
             comments * self.weight_comments +

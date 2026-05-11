@@ -134,12 +134,11 @@ def run_monitor():
             max_items = config.get('notifier', 'limits', 'max_items_per_batch', default=20)
             scored_products = scored_products[:max_items]
             
-            # 获取反馈URL
-            feedback_config = config.get('feedback', default={})
-            feedback_url = feedback_config.get('base_url', '')
+            # 获取反馈邮箱（mailto 链接用）
+            feedback_email = config.get('notifier', 'email', 'username', default='')
             
             # 发送邮件
-            success = notifier.send_notification(scored_products, feedback_url)
+            success = notifier.send_notification(scored_products, feedback_email)
             if success:
                 logger.info("通知发送成功")
             else:

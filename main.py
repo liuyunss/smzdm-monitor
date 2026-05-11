@@ -83,7 +83,7 @@ def run_monitor():
         crawler_config = {
             'items_per_page': config.get('monitor', 'items_per_page', default=20),
             'max_pages': config.get('monitor', 'max_pages', default=50),
-            'max_history_hours': config.get('monitor', 'max_history_hours', default=24),
+            'target_minutes': config.get('monitor', 'target_minutes', default=30),
         }
         crawler = get_crawler(crawler_config, proxy_manager)
 
@@ -99,9 +99,9 @@ def run_monitor():
         filter_config = config.get('filter', default=None) or {}
 
         # 抓取
+        target_minutes = config.get('monitor', 'target_minutes', default=30)
         max_pages = config.get('monitor', 'max_pages', default=50)
-        max_hours = config.get('monitor', 'max_history_hours', default=24)
-        products = crawler.fetch_multiple_pages(max_pages=max_pages, max_hours=max_hours)
+        products = crawler.fetch_multiple_pages(target_minutes=target_minutes, max_pages=max_pages)
         logger.info(f"抓取完成，共 {len(products)} 个商品")
 
         if not products:

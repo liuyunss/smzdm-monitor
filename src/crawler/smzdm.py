@@ -34,7 +34,7 @@ class SmzdmCrawler:
     def fetch_deals(self, page: int = 1) -> Optional[List[Dict]]:
         """抓取好价商品"""
         # type=youhui 有互动数据，faxian 频道互动数据全为0
-        api_url = f'https://api.smzdm.com/v1/list?limit=20&offset={(page-1)*20}&type=youhui'
+        api_url = f'https://api.smzdm.com/v1/list?limit=20&offset={(page-1)*20}&type=youhui&order=time'
         
         proxy = None
         if self.proxy_manager:
@@ -153,12 +153,11 @@ class SmzdmCrawler:
                     result[mapping[key]] = int(value)
         
         return result
-    
-    def fetch_multiple_pages(self, max_pages: int = 50, max_hours: int = 24) -> List[Dict]:
-        """抓取多页数据（时间序 + 热度补充）"""
+    def fetch_multiple_pages(self, target_minutes: int = 30, max_pages: int = 50) -> List[Dict]:
+        """动态页数抓取：覆盖 target_minutes 分钟的数据量，自动停止"""
         all_products = []
+        target_hours = target_minutes / 60
 
-        # 1. 时间序：最新优惠
         for page in range(1, max_pages + 1):
             delay = random.uniform(0.5, 1.5)
             time.sleep(delay)
@@ -167,63 +166,17 @@ class SmzdmCrawler:
             if not products:
                 break
 
-            # 检查时间范围
-            if max_hours > 0:
-                products = [p for p in products if p.get('age_hours', 0) <= max_hours]
-                if not products:
-                    break
-
             all_products.extend(products)
-            logger.info(f"已抓取 {len(all_products)} 个商品")
 
-        # 2. 热度序：近期真正火的商品（补充源）
-        hot_products = self.fetch_hot_deals(max_hours=max_hours)
-        if hot_products:
-            # 去重合并
-            existing_ids = {p['id'] for p in all_products}
-            new_hot = [p for p in hot_products if p['id'] not in existing_ids]
-            all_products.extend(new_hot)
-            logger.info(f"热度补充 {len(new_hot)} 个商品（去重后）")
-
-        return all_products
-
-    def fetch_hot_deals(self, max_hours: int = 24) -> List[Dict]:
-        """抓取热度排序的商品（补充源）"""
-        all_products = []
-        for page in range(1, 6):  # 最多5页=100条
-            api_url = f'https://api.smzdm.com/v1/list?limit=20&offset={(page-1)*20}&type=youhui&order=hot'
-            proxy = None
-            if self.proxy_manager:
-                proxy = self.proxy_manager.get_proxy()
-            try:
-                if proxy:
-                    response = self.session.get(api_url, proxies=proxy.dict, timeout=30)
-                else:
-                    response = self.session.get(api_url, timeout=30)
-                if proxy and self.proxy_manager:
-                    self.proxy_manager.on_success(proxy)
-                if response.status_code != 200:
-                    break
-                data = response.json()
-                rows = data.get('data', {}).get('rows', [])
-                if not rows:
-                    break
-                products = [p for item in rows if (p := self._parse_item(item))]
-                if max_hours > 0:
-                    products = [p for p in products if p.get('age_hours', 0) <= max_hours]
-                if not products:
-                    break
-                all_products.extend(products)
-                time.sleep(random.uniform(0.3, 0.8))
-            except Exception as e:
-                logger.warning(f"热度抓取失败: {e}")
-                if proxy and self.proxy_manager:
-                    self.proxy_manager.on_failure(proxy)
+            # 检查最旧数据是否已超出目标时间窗口
+            oldest_age = max((p.get('age_hours', 0) for p in products), default=0)
+            if oldest_age >= target_hours:
+                logger.info(f"覆盖{target_minutes}分钟，停止（第{page}页，最旧{oldest_age:.1f}h）")
                 break
-        logger.info(f"热度源抓取 {len(all_products)} 个商品")
+
+        logger.info(f"共抓取 {len(all_products)} 个商品（{page}页）")
         return all_products
 
-
-def get_crawler(config: Dict, proxy_manager=None) -> SmzdmCrawler:
+def get_crawler(config: Dict, proxy_manager=None):
     """创建爬虫实例"""
     return SmzdmCrawler(config, proxy_manager)

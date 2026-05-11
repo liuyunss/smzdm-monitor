@@ -32,12 +32,8 @@ class EmailNotifier:
         if not products:
             return False
         
-        # 主题：简洁格式（编号:商品ID，不含名字）
-        subject_items = ','.join([
-            f'{i}:{p.get("id","?")}'
-            for i, p in enumerate(products, 1)
-        ])
-        subject = f"【SMZDM好价】{subject_items} - {datetime.now().strftime('%m-%d %H:%M')}"
+        # 主题：简洁格式
+        subject = f"【SMZDM好价】{len(products)}件好价 - {datetime.now().strftime('%m-%d %H:%M')}"
         
         html_content = self._build_html(products)
         return self._send_email(subject, html_content)

@@ -12,7 +12,9 @@ import json
 import sys
 import argparse
 
-DB_PATH = './data/smzdm.db'
+from src.config.loader import get_config
+_config = get_config()
+DB_PATH = _config.get('storage', {}).get('db_path', './data/smzdm.db')
 
 
 def export_preferences():

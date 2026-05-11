@@ -34,7 +34,7 @@ class SmzdmCrawler:
     def fetch_deals(self, page: int = 1) -> Optional[List[Dict]]:
         """抓取好价商品"""
         # type=youhui 有互动数据，faxian 频道互动数据全为0
-        api_url = f'https://api.smzdm.com/v1/list?limit=20&offset={(page-1)*20}&type=youhui&order=time'
+        api_url = f'https://api.smzdm.com/v1/list?limit={self.config.get("items_per_page", 20)}&offset={(page-1)*self.config.get("items_per_page", 20)}&type=youhui&order=time'
         
         proxy = None
         if self.proxy_manager:

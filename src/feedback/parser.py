@@ -60,13 +60,18 @@ class FeedbackParser:
             pass
         return set()
     
+    MAX_UIDS = 5000
+
     def _save_processed_uids(self):
-        """保存已处理的UID到文件"""
+        """保存已处理的UID到文件（保留最近 N 条）"""
         try:
             os.makedirs(os.path.dirname(self._processed_file), exist_ok=True)
+            # 转为 list 保留最近的（set 无序，用文件顺序做近似）
+            uids = list(self._processed_uids)[-self.MAX_UIDS:]
             with open(self._processed_file, 'w') as f:
-                for uid in self._processed_uids:
+                for uid in uids:
                     f.write(f"{uid}\n")
+            self._processed_uids = set(uids)
         except Exception as e:
             logger.warning(f"保存已处理UID失败: {e}")
     
@@ -84,7 +89,7 @@ class FeedbackParser:
             mail.login(self.username, self.password)
             mail.select(self.folder)
             
-            since = (datetime.now() - timedelta(hours=1)).strftime('%d-%b-%Y')
+            since = (datetime.now() - timedelta(hours=2)).strftime('%d-%b-%Y')
             status, messages = mail.search(None, f'(SINCE "{since}")')
             
             if status != 'OK':
@@ -95,7 +100,8 @@ class FeedbackParser:
             logger.debug(f"找到 {len(msg_ids)} 封最近邮件")
             
             for msg_id in msg_ids:
-                if msg_id in self._processed_uids:
+                msg_id_str = msg_id.decode() if isinstance(msg_id, bytes) else str(msg_id)
+                if msg_id_str in self._processed_uids:
                     continue
                 
                 status, msg_data = mail.fetch(msg_id, '(RFC822)')
@@ -108,7 +114,7 @@ class FeedbackParser:
                 from_addr = msg.get('From', '')
                 
                 if self.username not in from_addr:
-                    self._processed_uids.add(msg_id)
+                    self._processed_uids.add(msg_id_str)
                     continue
                 
                 # 解析设置命令
@@ -124,7 +130,7 @@ class FeedbackParser:
                 if parsed_settings:
                     logger.info(f"解析到 {len(parsed_settings)} 条设置")
                 
-                self._processed_uids.add(msg_id)
+                self._processed_uids.add(msg_id_str)
             
             mail.logout()
             

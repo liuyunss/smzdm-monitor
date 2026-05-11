@@ -30,6 +30,10 @@ config.yaml
 .env
 *.env
 
+# 运行时数据（不提交）
+data/
+logs/
+
 # IDE
 .vscode/
 .idea/

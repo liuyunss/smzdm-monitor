@@ -10,7 +10,6 @@ import logging
 import math
 import re
 from typing import List, Dict, Optional
-from datetime import datetime, timedelta
 
 logger = logging.getLogger(__name__)
 
@@ -32,8 +31,8 @@ class Scorer:
         self.weight_unworthy = weights.get('unworthy', -0.5)
         self.weight_price = weights.get('price', 0.15)
         
-        self.min_composite_score = self.config.get('min_composite_score', 35)
         self.min_age_hours = self.config.get('min_age_hours', 1)
+        self.scale = self.config.get('scale', 14) if self.config else 14
     
     def calculate_score(self, product: Dict, price_history: List[Dict] = None) -> float:
         """计算商品综合评分（含品类偏好加权）"""

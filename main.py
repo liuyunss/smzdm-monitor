@@ -18,19 +18,13 @@ from zoneinfo import ZoneInfo
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from src.config.loader import get_config, reload_config
-from src.storage.database import _db_instance as _db_ref, Database
-from src.scorer.algorithm import _scorer_instance as _scorer_ref, Scorer
-from src.scorer.preference import _pref_instance as _pref_ref, CategoryPreference
 from src.notifier.email import EmailNotifier
-from src.feedback.parser import _feedback_parser_instance as _parser_ref, FeedbackParser
-from src.proxy.manager import _proxy_manager as _proxy_ref, ProxyManager
 from src.storage.database import get_db
 from src.proxy.manager import get_proxy_manager
 from src.crawler.smzdm import get_crawler
 from src.scorer.algorithm import get_scorer
 from src.scorer.category import tag_categories_batch, tag_category
 from src.scorer.preference import get_category_pref
-from src.notifier.email import EmailNotifier
 from src.feedback.parser import get_feedback_parser
 
 # 日志
@@ -74,10 +68,15 @@ def _load_quiet_buffer():
     return []
 
 def _save_quiet_buffer(buf):
-    """保存免打扰缓冲到文件"""
+    """保存免打扰缓冲到文件（合并已有数据）"""
+    existing = _load_quiet_buffer()
+    existing_ids = {p['id'] for p in existing}
+    for item in buf:
+        if item['id'] not in existing_ids:
+            existing.append(item)
     os.makedirs(os.path.dirname(_QUIET_BUFFER_FILE), exist_ok=True)
     with open(_QUIET_BUFFER_FILE, 'w') as f:
-        json.dump(buf, f)
+        json.dump(existing, f)
 
 def _clear_quiet_buffer():
     """清空免打扰缓冲文件"""
@@ -166,18 +165,19 @@ def run_monitor():
         to_save = []
 
         quiet = is_quiet_hours(config)
+        quiet_buffer = _load_quiet_buffer()
 
         # 批量查询价格历史（避免 N+1）
         product_ids = [p['id'] for p in filtered_products]
         price_history_map = db.get_price_history_batch(product_ids)
         
+        min_score = config.get('scorer', 'min_composite_score', default=35)
         for product in filtered_products:
             price_history = price_history_map.get(product['id'], [])
             score = scorer.calculate_score(product, price_history)
             product['score'] = score
             to_save.append(product)
 
-            min_score = config.get('scorer', 'min_composite_score', default=35)
             if score >= min_score:
                 if quiet:
                     # 免打扰：先不标记已通知，攒起来

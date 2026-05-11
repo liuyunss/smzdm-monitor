@@ -27,6 +27,7 @@ class EmailNotifier:
         self.username = os.environ.get('SMTP_USERNAME') or self.config.get('username', '')
         self.password = os.environ.get('SMTP_PASSWORD') or self.config.get('password', '')
         self.to_email = os.environ.get('SMTP_TO') or self.config.get('to_email', '')
+        self.from_name = self.config.get('from_name', self.username)
     
     def send_notification(self, products: List[Dict]) -> bool:
         if not products:
@@ -173,7 +174,7 @@ class EmailNotifier:
         try:
             msg = MIMEMultipart('alternative')
             msg['Subject'] = subject
-            msg['From'] = self.username
+            msg['From'] = f"{self.from_name} <{self.username}>"
             msg['To'] = self.to_email
             
             msg.attach(MIMEText(html_content, 'html', 'utf-8'))

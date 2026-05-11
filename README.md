@@ -1,181 +1,146 @@
-# 什么值得买好价监控系统
+# 什么值得买好价监控
 
-智能监控什么值得买好价商品，通过邮件提醒并支持用户反馈学习。
+监控什么值得买好价频道，评分过滤后邮件推送，支持邮件回复反馈调整品类偏好。
 
-## ✨ 功能特性
+## 功能
 
-- 🔄 **自动抓取** - 使用什么值得买API自动获取好价商品
-- 📊 **智能评分** - 多维度评分算法（历史低价、评论增速、热度）
-- 🎯 **精准过滤** - 黑名单/白名单规则，屏蔽低质商品
-- 🛡️ **代理保护** - 代理IP池自动轮换，保护原始IP
-- 📧 **邮件提醒** - HTML格式邮件，包含反馈按钮
-- 📈 **反馈学习** - 根据用户反馈调整推荐权重
-- ⚙️ **配置驱动** - 所有参数通过YAML配置，灵活可调
+- API 抓取好价商品，动态翻页覆盖指定时间段
+- 绝对互动量评分 + 品类偏好加权
+- 邮件推送，免打扰时段攒数据批量发
+- 邮件回复反馈（好评/差评/跳过），学习品类偏好
+- 去重推送，同一商品最多推 2 次
 
-## 🚀 快速开始
-
-### 1. 安装依赖
+## 快速开始
 
 ```bash
 git clone https://github.com/liuyunss/smzdm-monitor.git
 cd smzdm-monitor
 pip install -r requirements.txt
-```
 
-### 2. 配置系统
-
-```bash
-# 复制配置模板
 cp config.yaml.example config.yaml
 cp .env.example .env
+# 编辑 .env 填写邮箱授权码
 ```
 
-编辑 `.env` 填写敏感信息（邮箱授权码等）：
+### 运行
+
+```bash
+# 前台单次运行
+python main.py
+
+# 后台持续运行（默认 5 分钟一轮）
+python main.py --daemon
+```
+
+### Docker
+
+```bash
+docker compose up -d
+```
+
+`config.yaml` 和 `.env` 已挂载为外部卷，可随时修改后重启生效。
+
+## 配置
+
+### .env（敏感信息，不提交 Git）
 
 ```env
-SMZDM_EMAIL_USERNAME=your_email@qq.com
-SMZDM_EMAIL_PASSWORD=your_auth_code
-SMZDM_EMAIL_TO=recipient@qq.com
+SMTP_USERNAME=809153781@qq.com
+SMTP_PASSWORD=你的授权码
+SMTP_TO=809153781@qq.com
 ```
 
-编辑 `config.yaml` 调整非敏感参数（评分权重、过滤规则等）。
-
-> ⚠️ `.env` 和 `config.yaml` 已在 `.gitignore` 中，不会被提交到 Git。
-
-### 3. 运行监控
-
-```bash
-# 单次运行
-python main.py --monitor
-
-# 运行反馈服务
-python main.py --feedback
-```
-
-### 4. 设置定时任务（可选）
-
-```bash
-crontab -e
-# 添加：每30分钟运行一次
-*/30 * * * * cd /opt/data/home/smzdm-monitor && python main.py --monitor >> logs/cron.log 2>&1
-```
-
-## 📊 评分算法
-
-### 综合评分公式
-
-```
-总分 = 历史低价分 × 0.4 + 评论增速分 × 0.3 + 热度分 × 0.3
-```
-
-### 评分维度
-
-| 维度 | 权重 | 说明 |
-|------|------|------|
-| 历史低价 | 40% | 当前价格与历史最低价的比较 |
-| 评论增速 | 30% | 每小时评论数量增长速度 |
-| 热度 | 30% | 综合评论、收藏、值/不值投票 |
-
-### 过滤规则
-
-- **黑名单关键词**：拼多多、百亿补贴等
-- **黑名单店铺**：指定店铺屏蔽
-- **白名单优先**：白名单商品不受黑名单影响
-
-## 📁 项目结构
-
-```
-smzdm-monitor/
-├── src/
-│   ├── config/         # 配置加载模块
-│   ├── storage/        # 数据库存储模块
-│   ├── proxy/          # 代理管理模块
-│   ├── crawler/        # 爬虫模块
-│   ├── scorer/         # 评分算法模块
-│   ├── notifier/       # 通知模块
-│   └── feedback/       # 反馈服务模块
-├── config.yaml.example # 配置模板（提交到 Git）
-├── .env.example        # 环境变量模板（提交到 Git）
-├── config.yaml         # 实际配置（不提交）
-├── .env                # 敏感信息（不提交）
-├── main.py             # 主入口
-└── requirements.txt    # 依赖
-```
-
-## 🔧 配置说明
-
-### 监控设置
+### config.yaml（从 example 复制）
 
 ```yaml
 monitor:
-  interval: 1800           # 扫描间隔（秒）
-  max_pages: 50            # 最大扫描页数
-  max_history_hours: 24    # 扫描时间范围
-```
+  interval: 300            # 扫描间隔（秒）
+  items_per_page: 20       # 每页条数
+  max_pages: 50            # 最大翻页数
+  target_minutes: 30       # 动态翻页目标覆盖时间
+  quiet_hours:             # 免打扰（北京时间）
+    enabled: false
+    start: '00:30'
+    end: '07:30'
 
-### 评分权重
-
-```yaml
 scorer:
+  min_age_hours: 1
+  min_composite_score: 50  # 低于此分不推送
   weights:
-    historical_low: 0.4    # 历史低价权重
-    comment_growth: 0.3    # 评论增速权重
-    popularity: 0.3        # 热度权重
+    comments: 0.1          # 评论权重低（很多是空的）
+    collection: 3          # 收藏
+    worthy: 1.5            # 值
+    unworthy: -2           # 不值（一个不值抵消一个值+）
+    price: 0.15            # 价格优势
+
+notifier:
+  email:
+    from_name: SMZDM监控
+    smtp_server: smtp.qq.com
+    smtp_port: 587
+    use_tls: true
+    username: 809153781@qq.com
+    to_email: 809153781@qq.com
 ```
 
-### 代理配置
+## 评分逻辑
 
-```yaml
-proxy:
-  enabled: true
-  source: "free"           # 免费代理源
-  rotation:
-    on_request: true       # 每次请求轮换
-    on_failure: true       # 失败自动切换
+```
+score = log1p(comments×0.1 + collection×3 + worthy×1.5 + unworthy×(-2)) × 14
+      + 价格优势分 × 0.15
+      × 品类偏好权重（0.3~1.5）
 ```
 
-## 📝 数据字段
+推送门槛：
+- 收藏+值 ≥ 15
+- 值 ≥ 收藏 且 值 ≥ 评论
+- 综合分 ≥ 50
+- 同一商品最多推 2 次，第二次需分数增长 ≥ 10
 
-从什么值得买API获取的数据：
+## 邮件反馈
 
-| 字段 | 说明 | 示例 |
-|------|------|------|
-| article_id | 商品ID | 12345678 |
-| article_title | 商品标题 | "iPhone 15 128G" |
-| article_price | 商品价格 | "5999" |
-| article_mall | 店铺名称 | "京东" |
-| article_worthy | 值投票 | 150 |
-| article_unworthy | 不值投票 | 10 |
-| article_comment | 评论数 | 89 |
+邮件标题包含商品编号（如 `1:400001,2:400002`），回复邮件时在正文写：
 
-## 🤝 反馈学习
+- `1` 或 `1值` — 好评（品类权重 +0.3）
+- `1差` — 差评（品类权重 -0.3）
+- `1跳` — 跳过（不调整）
+- `set 科技 1.2` — 手动设置品类权重
+- `prefs` — 查看当前偏好
 
-系统支持用户反馈学习：
+系统每 5 分钟检查邮箱，解析回复并更新品类偏好。
 
-1. 邮件中包含反馈按钮（有用/没用/再提醒）
-2. 用户点击后记录到数据库
-3. 系统根据反馈调整评分权重
-4. 个性化推荐更准确
+## 项目结构
 
-## ⚠️ 注意事项
+```
+smzdm-monitor/
+├── main.py                 # 主入口
+├── config.yaml.example     # 配置模板
+├── .env.example            # 环境变量模板
+├── docker-compose.yml      # Docker 部署
+├── Dockerfile
+├── requirements.txt
+├── scripts/
+│   └── cleanup.py          # 数据清理（30天保留）
+├── export_prefs.py         # 导出品类偏好为 JSON
+└── src/
+    ├── config/loader.py    # YAML + 环境变量加载
+    ├── crawler/smzdm.py    # SMZDM API 爬虫
+    ├── scorer/
+    │   ├── algorithm.py    # 评分算法
+    │   ├── category.py     # 品类标签（12类）
+    │   └── preference.py   # 品类偏好学习
+    ├── storage/database.py # SQLite 存储
+    ├── notifier/email.py   # 邮件推送
+    ├── feedback/parser.py  # IMAP 反馈解析
+    └── proxy/manager.py    # 代理管理（暂未启用）
+```
 
-1. **邮箱配置**：需要开启SMTP服务并获取授权码
-2. **代理质量**：免费代理不稳定，建议先测试可用性
-3. **API限制**：什么值得买API可能有访问频率限制
-4. **数据存储**：SQLite数据库文件在 `data/smzdm.db`
+## 安全
 
-## 🔐 安全说明
+- `.env` 和 `config.yaml` 在 `.gitignore` 中，不会提交
+- 凭据通过环境变量注入，`config.yaml` 不含密码
+- `data/` 和 `logs/` 目录不提交
 
-- 敏感信息（授权码、密码）通过 `.env` 文件管理，**不要提交到 Git**
-- `config.yaml` 仅包含非敏感参数，可安全提交
-- 如果意外提交了密钥，应立即撤销并重新生成
-- 环境变量优先级高于 `config.yaml`，可用于 CI/CD 等场景
+## License
 
-## 📄 License
-
-MIT License
-
-## 🔗 相关链接
-
-- [什么值得买](https://www.smzdm.com/)
-- [GitHub仓库](https://github.com/liuyunss/smzdm-monitor)
+MIT

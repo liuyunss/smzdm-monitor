@@ -61,7 +61,3 @@ def tag_categories_batch(products: List[Dict]) -> List[Dict]:
             product['category'] = tag_category(product.get('title', ''))
     return products
 
-
-def get_all_categories() -> List[str]:
-    """获取所有支持的品类名称"""
-    return list(CATEGORY_KEYWORDS.keys()) + ['其他']

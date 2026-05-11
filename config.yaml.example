@@ -1,14 +1,6 @@
 # 什么值得买好价监控 - 配置文件
 # 复制为 config.yaml 后修改
 
-feedback:
-  base_url: http://localhost:5000
-  enabled: true
-  learning:
-    adjustment_factor: 0.1
-    min_feedback_count: 5
-  port: 5000
-
 filter:
   blacklist_categories: []
   blacklist_ids: []
@@ -20,25 +12,18 @@ filter:
   whitelist_ids: []
   whitelist_keywords: []
 
-logging:
-  backup_count: 5
-  console: true
-  file: ./logs/smzdm.log
-  level: INFO
-  max_size: 10
-
 monitor:
-  channel_types:
-    - faxian
-    - youhui
-  interval: 300
-  items_per_page: 20
-  max_history_hours: 24
-  max_pages: 50
+  interval: 300          # 监控间隔（秒）
+  items_per_page: 20     # 每页条数
+  max_pages: 50          # 最大翻页数
+  target_minutes: 30     # 目标覆盖时间（分钟），动态翻页
+  quiet_hours:           # 免打扰时段（北京时间）
+    enabled: false
+    start: '00:30'
+    end: '07:30'
 
 notifier:
   email:
-    enabled: true
     from_name: SMZDM监控
     smtp_port: 587
     smtp_server: smtp.qq.com
@@ -46,27 +31,9 @@ notifier:
     use_tls: true
     username: 809153781@qq.com
     # password 通过 .env 的 SMTP_PASSWORD 注入
-  limits:
-    max_items_per_batch: 20
-    max_notifications_per_item: 2
-  template: default
 
 proxy:
-  api_key: ''
-  api_url: ''
   enabled: false
-  free_sources:
-    - https://proxylist.geonode.com/api/proxy-list?limit=100&page=1&sort_by=lastChecked&sort_type=desc&protocols=socks5,http&country=CN
-    - https://www.proxy-list.download/api/v1/get?type=http
-  rotation:
-    max_failures: 3
-    on_failure: true
-    on_request: true
-  source: free
-  validation:
-    enabled: true
-    test_url: https://httpbin.org/ip
-    timeout: 10
 
 scorer:
   min_age_hours: 1
@@ -79,6 +46,5 @@ scorer:
     price: 0.15
 
 storage:
-  auto_cleanup: true
   db_path: ./data/smzdm.db
   retention_days: 30

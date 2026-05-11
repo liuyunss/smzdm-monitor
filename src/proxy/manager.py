@@ -182,10 +182,11 @@ class ProxyManager:
         if not self.proxies:
             return None
         
+        proxy = self.proxies[self.current_index]
         if self.on_request:
             self.current_index = (self.current_index + 1) % len(self.proxies)
         
-        return self.proxies[self.current_index]
+        return proxy
     
     def on_success(self, proxy: Proxy):
         """代理请求成功"""
@@ -200,15 +201,6 @@ class ProxyManager:
             # 移除失败过多的代理
             self.proxies = [p for p in self.proxies if p != proxy]
             logger.warning(f"移除失效代理: {proxy}")
-    
-    def add_proxy(self, proxy: Proxy):
-        """添加代理"""
-        if proxy not in self.proxies:
-            self.proxies.append(proxy)
-    
-    def remove_proxy(self, proxy: Proxy):
-        """移除代理"""
-        self.proxies = [p for p in self.proxies if p != proxy]
     
     def get_stats(self) -> Dict:
         """获取代理统计"""
@@ -235,8 +227,3 @@ def get_proxy_manager(config: Dict) -> ProxyManager:
     if _proxy_manager is None:
         _proxy_manager = ProxyManager(config)
     return _proxy_manager
-
-def reset_proxy_manager():
-    """重置代理管理器"""
-    global _proxy_manager
-    _proxy_manager = None

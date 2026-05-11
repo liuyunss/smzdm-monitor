@@ -93,29 +93,6 @@ class CategoryPreference:
         good_rate = good_count / total
         return max(0.3, min(1.5, 0.3 + good_rate * 1.2))
     
-    def get_all_prefs(self) -> Dict[str, Dict]:
-        """获取所有品类偏好"""
-        with self.db._get_conn() as conn:
-            rows = conn.execute(
-                'SELECT category, good_count, bad_count, manual_value FROM category_pref'
-            ).fetchall()
-        
-        result = {}
-        for row in rows:
-            category, good_count, bad_count, manual_value = row
-            weight = self.get_pref_weight(category)
-            result[category] = {
-                'good_count': good_count,
-                'bad_count': bad_count,
-                'manual_value': manual_value,
-                'weight': round(weight, 2),
-            }
-        return result
-
-
-# 全局实例
-_pref_instance = None
-
 def get_category_pref(database) -> CategoryPreference:
     global _pref_instance
     if _pref_instance is None:

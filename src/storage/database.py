@@ -132,65 +132,42 @@ class Database:
                 )
             ''')
     
-    def product_exists(self, product_id: str) -> bool:
-        """检查商品是否存在"""
-        with self._get_conn() as conn:
-            cursor = conn.cursor()
-            cursor.execute('SELECT 1 FROM products WHERE id = ?', (product_id,))
-            return cursor.fetchone() is not None
-    
-    def save_product(self, product: Dict) -> bool:
-        """保存商品信息"""
-        with self._get_conn() as conn:
-            cursor = conn.cursor()
+    def _upsert_product(self, cursor, product: Dict):
+        """单条商品 UPSERT + 价格历史 + 互动快照"""
+        cursor.execute('''
+            INSERT INTO products
+            (id, title, price, mall, url, channel_type, comments, collection, worthy, unworthy, score, category, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(id) DO UPDATE SET
+                title=excluded.title, price=excluded.price, mall=excluded.mall,
+                url=excluded.url, channel_type=excluded.channel_type,
+                comments=excluded.comments, collection=excluded.collection,
+                worthy=excluded.worthy, unworthy=excluded.unworthy,
+                score=excluded.score, category=excluded.category,
+                updated_at=CURRENT_TIMESTAMP
+        ''', (
+            product['id'], product['title'], product.get('price', ''),
+            product.get('mall', ''), product.get('url', ''),
+            product.get('channel_type', ''), product.get('comments', 0),
+            product.get('collection', 0), product.get('worthy', 0),
+            product.get('unworthy', 0), product.get('score', 0),
+            product.get('category', '')
+        ))
+        if product.get('price'):
             cursor.execute('''
-                INSERT INTO products 
-                (id, title, price, mall, url, channel_type, comments, collection, worthy, unworthy, score, category, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-                ON CONFLICT(id) DO UPDATE SET
-                    title=excluded.title, price=excluded.price, mall=excluded.mall,
-                    url=excluded.url, channel_type=excluded.channel_type,
-                    comments=excluded.comments, collection=excluded.collection,
-                    worthy=excluded.worthy, unworthy=excluded.unworthy,
-                    score=excluded.score, category=excluded.category,
-                    updated_at=CURRENT_TIMESTAMP
-            ''', (
-                product['id'],
-                product['title'],
-                product.get('price', ''),
-                product.get('mall', ''),
-                product.get('url', ''),
-                product.get('channel_type', ''),
-                product.get('comments', 0),
-                product.get('collection', 0),
-                product.get('worthy', 0),
-                product.get('unworthy', 0),
-                product.get('score', 0),
-                product.get('category', '')
-            ))
-            
-            # 记录价格历史
-            if product.get('price'):
-                cursor.execute('''
-                    INSERT INTO price_history (product_id, price)
-                    VALUES (?, ?)
-                ''', (product['id'], product['price']))
-            
-            # 记录互动数据快照
-            cursor.execute('''
-                INSERT INTO engagement_history 
-                (product_id, comments, collection, worthy, unworthy)
-                VALUES (?, ?, ?, ?, ?)
-            ''', (
-                product['id'],
-                product.get('comments', 0),
-                product.get('collection', 0),
-                product.get('worthy', 0),
-                product.get('unworthy', 0)
-            ))
-            
-            return True
-    
+                INSERT INTO price_history (product_id, price)
+                VALUES (?, ?)
+            ''', (product['id'], product['price']))
+        cursor.execute('''
+            INSERT INTO engagement_history
+            (product_id, comments, collection, worthy, unworthy)
+            VALUES (?, ?, ?, ?, ?)
+        ''', (
+            product['id'], product.get('comments', 0),
+            product.get('collection', 0), product.get('worthy', 0),
+            product.get('unworthy', 0)
+        ))
+
     def get_product(self, product_id: str) -> Optional[Dict]:
         """获取商品信息"""
         with self._get_conn() as conn:
@@ -198,18 +175,6 @@ class Database:
             cursor.execute('SELECT * FROM products WHERE id = ?', (product_id,))
             row = cursor.fetchone()
             return dict(row) if row else None
-    
-    def get_price_history(self, product_id: str, days: int = 30) -> List[Dict]:
-        """获取价格历史"""
-        with self._get_conn() as conn:
-            cursor = conn.cursor()
-            since = datetime.now() - timedelta(days=days)
-            cursor.execute('''
-                SELECT * FROM price_history 
-                WHERE product_id = ? AND recorded_at >= ?
-                ORDER BY recorded_at DESC
-            ''', (product_id, since))
-            return [dict(row) for row in cursor.fetchall()]
     
     def get_price_history_batch(self, product_ids: List[str], days: int = 30) -> Dict[str, List[Dict]]:
         """批量获取价格历史（一次连接）"""
@@ -220,7 +185,7 @@ class Database:
             since = datetime.now() - timedelta(days=days)
             placeholders = ','.join('?' * len(product_ids))
             cursor.execute(f'''
-                SELECT product_id, * FROM price_history
+                SELECT * FROM price_history
                 WHERE product_id IN ({placeholders}) AND recorded_at >= ?
                 ORDER BY recorded_at DESC
             ''', (*product_ids, since))
@@ -232,75 +197,6 @@ class Database:
                     result.setdefault(pid, []).append(row_dict)
             return result
 
-    def get_lowest_price(self, product_id: str) -> Optional[str]:
-        """获取历史最低价"""
-        with self._get_conn() as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
-                SELECT MIN(CAST(price AS REAL)) as lowest_price
-                FROM price_history 
-                WHERE product_id = ? AND price != ''
-            ''', (product_id,))
-            row = cursor.fetchone()
-            return str(row['lowest_price']) if row and row['lowest_price'] else None
-    
-    def get_engagement_growth(self, product_id: str) -> Optional[Dict]:
-        """获取互动数据增长情况
-        
-        返回: {
-            'prev': {comments, collection, worthy, unworthy},
-            'curr': {comments, collection, worthy, unworthy},
-            'growth': {comments, collection, worthy, unworthy},
-            'total_growth': int,  # 总增长量
-            'snapshots': int      # 快照数量
-        }
-        """
-        with self._get_conn() as conn:
-            cursor = conn.cursor()
-            
-            # 获取所有快照（按时间排序）
-            cursor.execute('''
-                SELECT comments, collection, worthy, unworthy, recorded_at
-                FROM engagement_history 
-                WHERE product_id = ?
-                ORDER BY recorded_at ASC
-            ''', (product_id,))
-            snapshots = [dict(row) for row in cursor.fetchall()]
-            
-            if len(snapshots) < 2:
-                return None  # 至少需要2次快照才能计算增长
-            
-            prev = snapshots[0]
-            curr = snapshots[-1]
-            
-            growth = {
-                'comments': max(0, curr['comments'] - prev['comments']),
-                'collection': max(0, curr['collection'] - prev['collection']),
-                'worthy': max(0, curr['worthy'] - prev['worthy']),
-                'unworthy': max(0, curr['unworthy'] - prev['unworthy']),
-            }
-            
-            total_growth = sum(growth.values())
-            
-            return {
-                'prev': prev,
-                'curr': curr,
-                'growth': growth,
-                'total_growth': total_growth,
-                'snapshots': len(snapshots),
-            }
-    
-    def get_engagement_snapshot_count(self, product_id: str) -> int:
-        """获取商品的互动快照数量"""
-        with self._get_conn() as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
-                SELECT COUNT(*) as cnt
-                FROM engagement_history 
-                WHERE product_id = ?
-            ''', (product_id,))
-            return cursor.fetchone()['cnt']
-    
     def save_notification(self, product_id: str, current_score: float = 0) -> bool:
         """保存通知记录，返回是否成功（False=已达上限或分数未增长）"""
         with self._get_conn() as conn:
@@ -336,17 +232,6 @@ class Database:
 
             return True
 
-    def get_notification_count(self, product_id: str) -> int:
-        """获取已通知次数"""
-        with self._get_conn() as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
-                SELECT COALESCE(MAX(notification_count), 0) as count
-                FROM notifications
-                WHERE product_id = ?
-            ''', (product_id,))
-            return cursor.fetchone()['count']
-    
     def save_feedback(self, product_id: str, feedback_type: str, category: str = None) -> bool:
         """保存反馈记录"""
         with self._get_conn() as conn:
@@ -357,93 +242,12 @@ class Database:
             ''', (product_id, feedback_type, category))
             return True
     
-    def get_feedback_stats(self, category: str = None) -> Dict:
-        """获取反馈统计"""
-        with self._get_conn() as conn:
-            cursor = conn.cursor()
-            
-            if category:
-                cursor.execute('''
-                    SELECT 
-                        feedback_type,
-                        COUNT(*) as count
-                    FROM feedback 
-                    WHERE category = ?
-                    GROUP BY feedback_type
-                ''', (category,))
-            else:
-                cursor.execute('''
-                    SELECT 
-                        feedback_type,
-                        COUNT(*) as count
-                    FROM feedback 
-                    GROUP BY feedback_type
-                ''')
-            
-            return {row['feedback_type']: row['count'] for row in cursor.fetchall()}
-    
-    def save_proxy_usage(self, proxy: str, success: bool, response_time: float = 0):
-        """保存代理使用记录"""
-        with self._get_conn() as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
-                INSERT INTO proxy_usage (proxy, success, response_time)
-                VALUES (?, ?, ?)
-            ''', (proxy, success, response_time))
-    
-    def get_proxy_stats(self, proxy: str) -> Dict:
-        """获取代理统计"""
-        with self._get_conn() as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
-                SELECT 
-                    SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END) as success_count,
-                    SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END) as fail_count,
-                    AVG(response_time) as avg_response_time
-                FROM proxy_usage 
-                WHERE proxy = ?
-            ''', (proxy,))
-            row = cursor.fetchone()
-            return {
-                'success': row['success_count'] or 0,
-                'fail': row['fail_count'] or 0,
-                'avg_time': row['avg_response_time'] or 0
-            }
-    
     def save_products_batch(self, products: List[Dict]):
         """批量保存商品（单次连接）"""
         with self._get_conn() as conn:
             cursor = conn.cursor()
             for product in products:
-                cursor.execute('''
-                    INSERT INTO products 
-                    (id, title, price, mall, url, channel_type, comments, collection, worthy, unworthy, score, category, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-                    ON CONFLICT(id) DO UPDATE SET
-                        title=excluded.title, price=excluded.price, mall=excluded.mall,
-                        url=excluded.url, channel_type=excluded.channel_type,
-                        comments=excluded.comments, collection=excluded.collection,
-                        worthy=excluded.worthy, unworthy=excluded.unworthy,
-                        score=excluded.score, category=excluded.category,
-                        updated_at=CURRENT_TIMESTAMP
-                ''', (
-                    product['id'], product['title'], product.get('price', ''),
-                    product.get('mall', ''), product.get('url', ''),
-                    product.get('channel_type', ''), product.get('comments', 0),
-                    product.get('collection', 0), product.get('worthy', 0),
-                    product.get('unworthy', 0), product.get('score', 0),
-                    product.get('category', '')
-                ))
-                # 互动快照
-                cursor.execute('''
-                    INSERT INTO engagement_history 
-                    (product_id, comments, collection, worthy, unworthy)
-                    VALUES (?, ?, ?, ?, ?)
-                ''', (
-                    product['id'], product.get('comments', 0),
-                    product.get('collection', 0), product.get('worthy', 0),
-                    product.get('unworthy', 0)
-                ))
+                self._upsert_product(cursor, product)
     
     def cleanup_old_data(self, days: int = 30):
         """清理旧数据"""

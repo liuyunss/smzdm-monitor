@@ -144,9 +144,16 @@ class Database:
         with self._get_conn() as conn:
             cursor = conn.cursor()
             cursor.execute('''
-                INSERT OR REPLACE INTO products 
+                INSERT INTO products 
                 (id, title, price, mall, url, channel_type, comments, collection, worthy, unworthy, score, category, updated_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(id) DO UPDATE SET
+                    title=excluded.title, price=excluded.price, mall=excluded.mall,
+                    url=excluded.url, channel_type=excluded.channel_type,
+                    comments=excluded.comments, collection=excluded.collection,
+                    worthy=excluded.worthy, unworthy=excluded.unworthy,
+                    score=excluded.score, category=excluded.category,
+                    updated_at=CURRENT_TIMESTAMP
             ''', (
                 product['id'],
                 product['title'],
@@ -204,6 +211,27 @@ class Database:
             ''', (product_id, since))
             return [dict(row) for row in cursor.fetchall()]
     
+    def get_price_history_batch(self, product_ids: List[str], days: int = 30) -> Dict[str, List[Dict]]:
+        """批量获取价格历史（一次连接）"""
+        if not product_ids:
+            return {}
+        with self._get_conn() as conn:
+            cursor = conn.cursor()
+            since = datetime.now() - timedelta(days=days)
+            placeholders = ','.join('?' * len(product_ids))
+            cursor.execute(f'''
+                SELECT product_id, * FROM price_history
+                WHERE product_id IN ({placeholders}) AND recorded_at >= ?
+                ORDER BY recorded_at DESC
+            ''', (*product_ids, since))
+            result = {}
+            for row in cursor.fetchall():
+                row_dict = dict(row)
+                pid = row_dict.pop('product_id', None)
+                if pid:
+                    result.setdefault(pid, []).append(row_dict)
+            return result
+
     def get_lowest_price(self, product_id: str) -> Optional[str]:
         """获取历史最低价"""
         with self._get_conn() as conn:
@@ -276,6 +304,7 @@ class Database:
     def save_notification(self, product_id: str, current_score: float = 0) -> bool:
         """保存通知记录，返回是否成功（False=已达上限或分数未增长）"""
         with self._get_conn() as conn:
+            conn.execute('BEGIN EXCLUSIVE')
             cursor = conn.cursor()
 
             # 获取最大通知次数和最新分数
@@ -387,9 +416,16 @@ class Database:
             cursor = conn.cursor()
             for product in products:
                 cursor.execute('''
-                    INSERT OR REPLACE INTO products 
+                    INSERT INTO products 
                     (id, title, price, mall, url, channel_type, comments, collection, worthy, unworthy, score, category, updated_at)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    ON CONFLICT(id) DO UPDATE SET
+                        title=excluded.title, price=excluded.price, mall=excluded.mall,
+                        url=excluded.url, channel_type=excluded.channel_type,
+                        comments=excluded.comments, collection=excluded.collection,
+                        worthy=excluded.worthy, unworthy=excluded.unworthy,
+                        score=excluded.score, category=excluded.category,
+                        updated_at=CURRENT_TIMESTAMP
                 ''', (
                     product['id'], product['title'], product.get('price', ''),
                     product.get('mall', ''), product.get('url', ''),
@@ -427,11 +463,7 @@ class Database:
                 WHERE recorded_at < ?
             ''', (since,))
             
-            # 清理旧通知记录
-            cursor.execute('''
-                DELETE FROM notifications 
-                WHERE notified_at < ?
-            ''', (since,))
+            # 注意：不清理 notifications，避免重置推送计数
             
             # 清理旧代理使用记录
             cursor.execute('''

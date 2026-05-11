@@ -1,6 +1,6 @@
 """清理30天以上的旧数据"""
 import sys, os
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.config.loader import get_config
 from src.storage.database import get_db

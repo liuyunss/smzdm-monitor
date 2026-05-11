@@ -52,6 +52,8 @@ class ConfigLoader:
         """设置嵌套配置值"""
         d = self.config
         for key in keys[:-1]:
+            if key not in d or not isinstance(d[key], dict):
+                d[key] = {}
             d = d[key]
         d[keys[-1]] = value
     

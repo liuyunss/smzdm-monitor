@@ -169,6 +169,7 @@ class EmailNotifier:
             logger.error("邮件配置不完整，跳过发送")
             return False
         
+        server = None
         try:
             msg = MIMEMultipart('alternative')
             msg['Subject'] = subject
@@ -182,7 +183,6 @@ class EmailNotifier:
                 server.starttls()
             server.login(self.username, self.password)
             server.sendmail(self.username, [self.to_email], msg.as_string())
-            server.quit()
             
             logger.info(f"邮件发送成功: {len(subject)} 字符")
             return True
@@ -190,6 +190,12 @@ class EmailNotifier:
         except Exception as e:
             logger.error(f"邮件发送失败: {e}")
             return False
+        finally:
+            if server:
+                try:
+                    server.quit()
+                except Exception:
+                    pass
 
 
 

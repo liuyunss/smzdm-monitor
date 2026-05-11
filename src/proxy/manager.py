@@ -68,7 +68,7 @@ class ProxyManager:
         self.validation_url = self.config.get('validation', {}).get('test_url', 'https://httpbin.org/ip')
         self.validation_timeout = self.config.get('validation', {}).get('timeout', 10)
         self.on_request = self.config.get('rotation', {}).get('on_request', True)
-        self.on_failure = self.config.get('rotation', {}).get('on_failure', True)
+        self.rotate_on_failure = self.config.get('rotation', {}).get('on_failure', True)
         self.max_failures = self.config.get('rotation', {}).get('max_failures', 3)
     
     def _fetch_proxies(self):
@@ -196,7 +196,7 @@ class ProxyManager:
         """代理请求失败"""
         proxy.fail_count += 1
         
-        if self.on_failure and proxy.fail_count >= self.max_failures:
+        if self.rotate_on_failure and proxy.fail_count >= self.max_failures:
             # 移除失败过多的代理
             self.proxies = [p for p in self.proxies if p != proxy]
             logger.warning(f"移除失效代理: {proxy}")

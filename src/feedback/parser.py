@@ -47,7 +47,28 @@ class FeedbackParser:
         self.username = os.environ.get('SMTP_USERNAME') or self.config.get('username', '')
         self.password = os.environ.get('SMTP_PASSWORD') or self.config.get('password', '')
         self.folder = self.config.get('feedback_folder', 'INBOX')
-        self._processed_uids = set()
+        self._processed_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), '../../data/processed_uids.txt')
+        self._processed_uids = self._load_processed_uids()
+    
+    def _load_processed_uids(self) -> set:
+        """从文件加载已处理的UID"""
+        try:
+            if os.path.exists(self._processed_file):
+                with open(self._processed_file, 'r') as f:
+                    return set(line.strip() for line in f if line.strip())
+        except Exception:
+            pass
+        return set()
+    
+    def _save_processed_uids(self):
+        """保存已处理的UID到文件"""
+        try:
+            os.makedirs(os.path.dirname(self._processed_file), exist_ok=True)
+            with open(self._processed_file, 'w') as f:
+                for uid in self._processed_uids:
+                    f.write(f"{uid}\n")
+        except Exception as e:
+            logger.warning(f"保存已处理UID失败: {e}")
     
     def check_and_parse(self) -> List[Dict]:
         """检查邮箱并解析反馈"""
@@ -106,6 +127,9 @@ class FeedbackParser:
                 self._processed_uids.add(msg_id)
             
             mail.logout()
+            
+            # 持久化已处理UID
+            self._save_processed_uids()
             
             # 写入反馈
             if self.db and feedbacks:

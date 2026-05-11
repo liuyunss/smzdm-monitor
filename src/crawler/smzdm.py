@@ -7,7 +7,7 @@ import logging
 import re
 import random
 from typing import List, Dict, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
@@ -117,8 +117,8 @@ class SmzdmCrawler:
             age_hours = 0
             pub_ts = item.get('publish_date_lt', '')
             if pub_ts and str(pub_ts).isdigit():
-                pub_dt = datetime.fromtimestamp(int(pub_ts))
-                age_hours = (datetime.now() - pub_dt).total_seconds() / 3600
+                pub_dt = datetime.fromtimestamp(int(pub_ts), tz=timezone.utc)
+                age_hours = (datetime.now(timezone.utc) - pub_dt).total_seconds() / 3600
             
             return {
                 'id': str(article_id),
@@ -174,7 +174,7 @@ class SmzdmCrawler:
                 logger.info(f"覆盖{target_minutes}分钟，停止（第{page}页，最旧{oldest_age:.1f}h）")
                 break
 
-        logger.info(f"共抓取 {len(all_products)} 个商品（{page}页）")
+        logger.info(f"共抓取 {len(all_products)} 个商品（{len(all_products)//20 + 1}页）")
         return all_products
 
 def get_crawler(config: Dict, proxy_manager=None):

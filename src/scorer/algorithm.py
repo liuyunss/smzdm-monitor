@@ -7,6 +7,7 @@
 3. 品类偏好加权（根据用户反馈学习）
 """
 import logging
+import math
 import re
 from typing import List, Dict, Optional
 from datetime import datetime, timedelta
@@ -91,7 +92,6 @@ class Scorer:
             return 0
         
         # 非线性映射：对数缩放，避免头部商品分太高
-        import math
         log_val = math.log1p(value)
         # log_val 范围大约 0~8（value 0~3000）
         score = min(100, log_val * 14)

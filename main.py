@@ -11,12 +11,19 @@ import time
 import signal
 import logging
 import argparse
+import json
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from src.config.loader import get_config, reload_config
+from src.storage.database import _db_instance as _db_ref, Database
+from src.scorer.algorithm import _scorer_instance as _scorer_ref, Scorer
+from src.scorer.preference import _pref_instance as _pref_ref, CategoryPreference
+from src.notifier.email import EmailNotifier
+from src.feedback.parser import _feedback_parser_instance as _parser_ref, FeedbackParser
+from src.proxy.manager import _proxy_manager as _proxy_ref, ProxyManager
 from src.storage.database import get_db
 from src.proxy.manager import get_proxy_manager
 from src.crawler.smzdm import get_crawler
@@ -54,7 +61,30 @@ def is_quiet_hours(config) -> bool:
 
 # 优雅退出
 _running = True
-_quiet_buffer = []  # 免打扰期间攒的待发商品
+_QUIET_BUFFER_FILE = './data/quiet_buffer.json'
+
+def _load_quiet_buffer():
+    """从文件加载免打扰缓冲"""
+    try:
+        if os.path.exists(_QUIET_BUFFER_FILE):
+            with open(_QUIET_BUFFER_FILE, 'r') as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return []
+
+def _save_quiet_buffer(buf):
+    """保存免打扰缓冲到文件"""
+    os.makedirs(os.path.dirname(_QUIET_BUFFER_FILE), exist_ok=True)
+    with open(_QUIET_BUFFER_FILE, 'w') as f:
+        json.dump(buf, f)
+
+def _clear_quiet_buffer():
+    """清空免打扰缓冲文件"""
+    try:
+        os.remove(_QUIET_BUFFER_FILE)
+    except FileNotFoundError:
+        pass
 def _signal_handler(sig, frame):
     global _running
     logger.info("收到退出信号，正在停止...")
@@ -137,8 +167,12 @@ def run_monitor():
 
         quiet = is_quiet_hours(config)
 
+        # 批量查询价格历史（避免 N+1）
+        product_ids = [p['id'] for p in filtered_products]
+        price_history_map = db.get_price_history_batch(product_ids)
+        
         for product in filtered_products:
-            price_history = db.get_price_history(product['id'])
+            price_history = price_history_map.get(product['id'], [])
             score = scorer.calculate_score(product, price_history)
             product['score'] = score
             to_save.append(product)
@@ -147,7 +181,7 @@ def run_monitor():
             if score >= min_score:
                 if quiet:
                     # 免打扰：先不标记已通知，攒起来
-                    _quiet_buffer.append(product)
+                    quiet_buffer.append(product)
                 else:
                     if db.save_notification(product['id'], current_score=score):
                         scored_products.append(product)
@@ -157,12 +191,16 @@ def run_monitor():
             db.save_products_batch(to_save)
 
         # 免打扰结束时，把攒的一起发
-        if not quiet and _quiet_buffer:
-            logger.info(f"免打扰结束，推送攒的 {len(_quiet_buffer)} 件商品")
-            for product in _quiet_buffer:
+        # 保存 quiet buffer
+        if quiet and quiet_buffer:
+            _save_quiet_buffer(quiet_buffer)
+        
+        if not quiet and quiet_buffer:
+            logger.info(f"免打扰结束，推送攒的 {len(quiet_buffer)} 件商品")
+            for product in quiet_buffer:
                 if db.save_notification(product['id'], current_score=product.get('score', 0)):
                     scored_products.append(product)
-            _quiet_buffer.clear()
+            _clear_quiet_buffer()
 
         logger.info(f"筛选出 {len(scored_products)} 个高分商品")
 

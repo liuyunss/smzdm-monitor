@@ -16,6 +16,7 @@ from src.proxy.manager import get_proxy_manager
 from src.crawler.smzdm import get_crawler
 from src.scorer.algorithm import get_scorer
 from src.notifier.email import get_notifier
+from src.feedback.parser import get_feedback_parser
 
 # 设置日志
 os.makedirs('logs', exist_ok=True)
@@ -45,12 +46,19 @@ def run_monitor():
         db = get_db(db_path)
         logger.info("数据库初始化完成")
         
-        # 3. 初始化代理管理器
+        # 3. 检查邮件反馈（在初始化代理/爬虫之前，避免不必要的开销）
+        logger.info("检查邮件反馈...")
+        parser = get_feedback_parser(config, db)
+        feedbacks = parser.check_and_parse()
+        if feedbacks:
+            logger.info(f"收到 {len(feedbacks)} 条反馈")
+        
+        # 4. 初始化代理管理器
         proxy_config = config.get('proxy', default={})
         proxy_manager = get_proxy_manager(proxy_config)
         logger.info(f"代理管理器初始化完成，可用代理: {len(proxy_manager.proxies)} 个")
         
-        # 4. 初始化爬虫
+        # 5. 初始化爬虫
         crawler_config = {
             'items_per_page': config.get('monitor', 'items_per_page', default=20),
             'max_pages': config.get('monitor', 'max_pages', default=50),
@@ -59,20 +67,20 @@ def run_monitor():
         crawler = get_crawler(crawler_config, proxy_manager)
         logger.info("爬虫初始化完成")
         
-        # 5. 初始化评分器
+        # 6. 初始化评分器
         scorer_config = config.get('scorer', default={})
         scorer = get_scorer(scorer_config)
         logger.info("评分器初始化完成")
         
-        # 6. 初始化通知器
+        # 7. 初始化通知器
         notifier_config = config.get('notifier', 'email', default={})
         notifier = get_notifier(notifier_config)
         logger.info("通知器初始化完成")
         
-        # 7. 获取过滤配置
+        # 8. 获取过滤配置
         filter_config = config.get('filter', default={})
         
-        # 8. 抓取商品
+        # 9. 抓取商品
         logger.info("开始抓取商品...")
         max_pages = config.get('monitor', 'max_pages', default=50)
         max_hours = config.get('monitor', 'max_history_hours', default=24)
@@ -83,37 +91,30 @@ def run_monitor():
             logger.warning("未抓取到任何商品")
             return
         
-        # 9. 过滤商品
+        # 10. 过滤商品
         logger.info("开始过滤商品...")
         filtered_products = scorer.filter_products(products, filter_config)
         logger.info(f"过滤后剩余 {len(filtered_products)} 个商品")
         
-        # 10. 计算评分（基于互动增长）
+        # 11. 计算评分（基于互动增长）
         logger.info("开始计算评分...")
         scored_products = []
-        first_run = True  # 标记是否首次运行
+        first_run = True
         
         for product in filtered_products:
-            # 获取互动增长数据
             engagement_growth = db.get_engagement_growth(product['id'])
             
-            # 保存商品（同时记录互动快照）
             product['score'] = 0
             db.save_product(product)
             
-            # 如果有增长数据，说明不是首次运行
             if engagement_growth:
                 first_run = False
-                
-                # 计算评分
                 price_history = db.get_price_history(product['id'])
                 score = scorer.calculate_score(product, price_history, engagement_growth)
                 product['score'] = score
                 
-                # 筛选高分商品
                 min_score = config.get('scorer', 'min_composite_score', default=45)
                 if score >= min_score:
-                    # 检查通知次数
                     notification_count = db.get_notification_count(product['id'])
                     max_notifications = config.get('notifier', 'limits', 'max_notifications_per_item', default=2)
                     
@@ -123,21 +124,17 @@ def run_monitor():
         
         logger.info(f"筛选出 {len(scored_products)} 个高分商品")
         
-        # 11. 发送通知
+        # 12. 发送通知
         if first_run:
             logger.info("首次运行，已记录基线数据，下次运行将开始评分")
         elif scored_products:
-            # 按评分排序
             scored_products.sort(key=lambda x: x.get('score', 0), reverse=True)
             
-            # 限制数量
             max_items = config.get('notifier', 'limits', 'max_items_per_batch', default=20)
             scored_products = scored_products[:max_items]
             
-            # 获取反馈邮箱（mailto 链接用）
             feedback_email = config.get('notifier', 'email', 'username', default='')
             
-            # 发送邮件
             success = notifier.send_notification(scored_products, feedback_email)
             if success:
                 logger.info("通知发送成功")
@@ -146,7 +143,7 @@ def run_monitor():
         else:
             logger.info("没有需要通知的商品")
         
-        # 12. 清理旧数据
+        # 13. 清理旧数据
         if config.get('storage', 'auto_cleanup', default=True):
             retention_days = config.get('storage', 'retention_days', default=30)
             db.cleanup_old_data(retention_days)
@@ -181,7 +178,6 @@ def main():
     
     args = parser.parse_args()
     
-    # 重新加载配置
     if args.config:
         reload_config(args.config)
     

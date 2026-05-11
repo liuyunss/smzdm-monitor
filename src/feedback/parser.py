@@ -2,7 +2,11 @@
 邮件反馈解析模块
 
 通过 IMAP 轮询 QQ 邮箱，解析用户回复的反馈邮件。
-格式: subject = feedback:batch:id1,id2,id3:good|bad|mixed
+
+支持格式:
+  1. 批量: subject = feedback:batch:id1,id2,id3:good|bad
+  2. 详细: subject = feedback:detail:id1,id2,... 
+           body 包含 "好评：1,3,5" "差评：2,4"（编号对应邮件中的商品顺序）
 """
 import imaplib
 import email
@@ -30,15 +34,10 @@ class FeedbackParser:
         self.username = self.config.get('username', '')
         self.password = self.config.get('password', '')
         self.folder = self.config.get('feedback_folder', 'INBOX')
-        # 已处理的邮件 ID
         self._processed_uids = set()
     
     def check_and_parse(self) -> List[Dict]:
-        """检查邮箱并解析反馈
-        
-        Returns:
-            解析出的反馈列表: [{product_id, feedback_type, timestamp}]
-        """
+        """检查邮箱并解析反馈"""
         if not self.username or not self.password:
             logger.warning("邮件配置不完整，跳过反馈检查")
             return []
@@ -46,12 +45,10 @@ class FeedbackParser:
         feedbacks = []
         
         try:
-            # 连接 IMAP
             mail = imaplib.IMAP4_SSL(self.imap_server, self.imap_port)
             mail.login(self.username, self.password)
             mail.select(self.folder)
             
-            # 搜索最近 1 小时内的邮件（避免重复处理）
             since = (datetime.now() - timedelta(hours=1)).strftime('%d-%b-%Y')
             status, messages = mail.search(None, f'(SINCE "{since}")')
             
@@ -64,7 +61,6 @@ class FeedbackParser:
             logger.info(f"找到 {len(msg_ids)} 封最近邮件")
             
             for msg_id in msg_ids:
-                # 跳过已处理的
                 if msg_id in self._processed_uids:
                     continue
                 
@@ -73,13 +69,24 @@ class FeedbackParser:
                     continue
                 
                 msg = email.message_from_bytes(msg_data[0][1])
-                subject = self._decode_subject(msg.get('Subject', ''))
+                subject = self._decode_header(msg.get('Subject', ''))
+                body = self._get_body(msg)
                 
-                # 解析反馈格式: feedback:batch:id1,id2,id3:good|bad|mixed
-                parsed = self._parse_subject(subject)
+                # 尝试批量格式: feedback:batch:ids:good|bad
+                parsed = self._parse_batch_subject(subject)
                 if parsed:
                     feedbacks.append(parsed)
-                    logger.info(f"解析到反馈: {parsed}")
+                    logger.info(f"解析到批量反馈: {parsed}")
+                    self._processed_uids.add(msg_id)
+                    continue
+                
+                # 尝试详细格式: feedback:detail:ids + body 解析
+                parsed = self._parse_detail(subject, body)
+                if parsed:
+                    feedbacks.extend(parsed)
+                    logger.info(f"解析到详细反馈: {len(parsed)} 条")
+                    self._processed_uids.add(msg_id)
+                    continue
                 
                 self._processed_uids.add(msg_id)
             
@@ -88,10 +95,8 @@ class FeedbackParser:
             # 写入数据库
             if self.db and feedbacks:
                 for fb in feedbacks:
-                    product_ids = fb['product_ids']
-                    for pid in product_ids:
-                        self.db.save_feedback(pid, fb['feedback_type'])
-                        logger.info(f"记录反馈: {pid} -> {fb['feedback_type']}")
+                    self.db.save_feedback(fb['product_id'], fb['feedback_type'])
+                    logger.info(f"记录反馈: {fb['product_id']} -> {fb['feedback_type']}")
             
             return feedbacks
             
@@ -103,7 +108,6 @@ class FeedbackParser:
         """解码邮件主题"""
         if not subject:
             return ""
-        
         decoded_parts = decode_header(subject)
         result = []
         for part, charset in decoded_parts:
@@ -113,42 +117,106 @@ class FeedbackParser:
                 result.append(part)
         return ''.join(result)
     
-    def _parse_subject(self, subject: str) -> Optional[Dict]:
-        """解析反馈邮件主题
-        
-        支持格式:
-        - feedback:batch:id1,id2,id3:good
-        - feedback:batch:id1,id2,id3:bad
-        - feedback:batch:id1,id2,id3:mixed
-        """
-        # 匹配 feedback:batch:xxx:good/bad/mixed
-        pattern = r'feedback:batch:([^:]+):(good|bad|mixed)'
+    def _get_body(self, msg) -> str:
+        """提取邮件正文"""
+        body = ""
+        if msg.is_multipart():
+            for part in msg.walk():
+                ct = part.get_content_type()
+                if ct == 'text/plain':
+                    payload = part.get_payload(decode=True)
+                    if payload:
+                        body = payload.decode('utf-8', errors='replace')
+                        break
+        else:
+            payload = msg.get_payload(decode=True)
+            if payload:
+                body = payload.decode('utf-8', errors='replace')
+        return body
+    
+    def _parse_batch_subject(self, subject: str) -> Optional[Dict]:
+        """解析批量反馈: feedback:batch:id1,id2,id3:good|bad"""
+        pattern = r'feedback:batch:([^:]+):(good|bad)'
         match = re.search(pattern, subject, re.IGNORECASE)
-        
         if not match:
             return None
         
         ids_str = match.group(1)
         feedback_type = match.group(2).lower()
         
-        # 解析商品 ID 列表
         product_ids = [pid.strip() for pid in ids_str.split(',') if pid.strip()]
-        
         if not product_ids:
             return None
         
-        # 标准化反馈类型
-        type_map = {
-            'good': 'helpful',
-            'bad': 'not_helpful',
-            'mixed': 'mixed',
-        }
+        type_map = {'good': 'helpful', 'bad': 'not_helpful'}
         
+        # 批量格式：每个 ID 一条反馈
         return {
             'product_ids': product_ids,
             'feedback_type': type_map.get(feedback_type, feedback_type),
             'timestamp': datetime.now().isoformat(),
         }
+    
+    def _parse_detail(self, subject: str, body: str) -> List[Dict]:
+        """解析详细反馈: feedback:detail:id1,id2,... + body 中的编号
+        
+        body 格式示例:
+            好评：1,3,5
+            差评：2,4
+        """
+        # 从 subject 提取 ID 列表（按顺序）
+        pattern = r'feedback:detail:([^:\s]+)'
+        match = re.search(pattern, subject, re.IGNORECASE)
+        if not match:
+            return []
+        
+        ids_str = match.group(1)
+        all_ids = [pid.strip() for pid in ids_str.split(',') if pid.strip()]
+        if not all_ids:
+            return []
+        
+        # 从 body 解析编号
+        good_indices = self._extract_indices(body, r'好评[：:]\s*([\d,\s]+)')
+        bad_indices = self._extract_indices(body, r'差评[：:]\s*([\d,\s]+)')
+        
+        if not good_indices and not bad_indices:
+            return []
+        
+        results = []
+        
+        # 编号是 1-based，转成 0-based 索引
+        for idx in good_indices:
+            if 0 < idx <= len(all_ids):
+                results.append({
+                    'product_id': all_ids[idx - 1],
+                    'feedback_type': 'helpful',
+                    'timestamp': datetime.now().isoformat(),
+                })
+        
+        for idx in bad_indices:
+            if 0 < idx <= len(all_ids):
+                results.append({
+                    'product_id': all_ids[idx - 1],
+                    'feedback_type': 'not_helpful',
+                    'timestamp': datetime.now().isoformat(),
+                })
+        
+        return results
+    
+    def _extract_indices(self, text: str, pattern: str) -> List[int]:
+        """从文本中提取编号列表"""
+        match = re.search(pattern, text)
+        if not match:
+            return []
+        
+        nums_str = match.group(1)
+        indices = []
+        for n in re.findall(r'\d+', nums_str):
+            try:
+                indices.append(int(n))
+            except ValueError:
+                pass
+        return indices
 
 
 # 全局实例

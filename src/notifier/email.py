@@ -39,7 +39,6 @@ class EmailNotifier:
     
     def _build_html(self, products: List[Dict], feedback_email: str = None) -> str:
         """构建HTML邮件内容"""
-        # 收集所有商品ID，用于批量反馈
         all_ids = ','.join([p.get('id', '') for p in products])
         
         html = f"""
@@ -54,8 +53,10 @@ class EmailNotifier:
         .header h1 {{ margin: 0 0 8px 0; font-size: 22px; }}
         .header p {{ margin: 0; opacity: 0.9; font-size: 14px; }}
         .content {{ background: white; padding: 20px; border-radius: 0 0 12px 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }}
-        .product {{ border-bottom: 1px solid #eee; padding: 14px 0; }}
+        .product {{ border-bottom: 1px solid #eee; padding: 14px 0; display: flex; gap: 12px; }}
         .product:last-child {{ border-bottom: none; }}
+        .product-num {{ background: #667eea; color: white; width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: bold; flex-shrink: 0; }}
+        .product-body {{ flex: 1; }}
         .product-title {{ font-size: 15px; font-weight: 600; color: #333; }}
         .product-meta {{ display: flex; gap: 16px; margin-top: 6px; font-size: 13px; }}
         .product-price {{ color: #e74c3c; font-weight: bold; }}
@@ -67,14 +68,19 @@ class EmailNotifier:
         .score-medium {{ background: #f39c12; color: white; }}
         .score-low {{ background: #95a5a6; color: white; }}
 
-        .feedback-box {{ background: #f8f9fa; border: 2px solid #e9ecef; border-radius: 12px; padding: 24px; margin-top: 24px; text-align: center; }}
-        .feedback-box h3 {{ margin: 0 0 12px 0; font-size: 16px; color: #333; }}
-        .feedback-box p {{ margin: 0 0 16px 0; font-size: 13px; color: #666; }}
-        .feedback-btns {{ display: flex; justify-content: center; gap: 12px; flex-wrap: wrap; }}
-        .fb {{ display: inline-block; padding: 12px 24px; border-radius: 8px; text-decoration: none; font-size: 14px; font-weight: 600; }}
+        .feedback-box {{ background: #f8f9fa; border: 2px solid #e9ecef; border-radius: 12px; padding: 24px; margin-top: 24px; }}
+        .feedback-box h3 {{ margin: 0 0 8px 0; font-size: 16px; color: #333; text-align: center; }}
+        .feedback-box > p {{ margin: 0 0 16px 0; font-size: 13px; color: #666; text-align: center; }}
+        .feedback-batch {{ display: flex; justify-content: center; gap: 12px; margin-bottom: 20px; flex-wrap: wrap; }}
+        .fb {{ display: inline-block; padding: 10px 20px; border-radius: 8px; text-decoration: none; font-size: 13px; font-weight: 600; }}
         .fb-good {{ background: #27ae60; color: white; }}
         .fb-bad {{ background: #e74c3c; color: white; }}
-        .fb-partial {{ background: #f39c12; color: white; }}
+        
+        .feedback-detail {{ border-top: 1px solid #dee2e6; padding-top: 16px; }}
+        .feedback-detail p {{ margin: 0 0 8px 0; font-size: 13px; color: #666; }}
+        .feedback-detail ol {{ margin: 0 0 12px 0; padding-left: 20px; font-size: 13px; color: #333; }}
+        .feedback-detail li {{ margin-bottom: 4px; }}
+        .fb-reply {{ display: inline-block; padding: 10px 20px; background: #6c757d; color: white; text-decoration: none; border-radius: 8px; font-size: 13px; font-weight: 600; }}
 
         .footer {{ text-align: center; padding: 20px; color: #999; font-size: 12px; }}
     </style>
@@ -88,39 +94,58 @@ class EmailNotifier:
         <div class="content">
 """
         
-        # 商品列表
-        for product in products:
+        # 商品列表（带编号）
+        for i, product in enumerate(products, 1):
             score = product.get('score', 0)
             score_class = 'score-high' if score >= 70 else 'score-medium' if score >= 40 else 'score-low'
             
             html += f"""
             <div class="product">
-                <div class="product-title">
-                    {product.get('title', '未知商品')}
-                    <span class="score {score_class}">{score:.0f}分</span>
+                <div class="product-num">{i}</div>
+                <div class="product-body">
+                    <div class="product-title">
+                        {product.get('title', '未知商品')}
+                        <span class="score {score_class}">{score:.0f}分</span>
+                    </div>
+                    <div class="product-meta">
+                        <span class="product-price">💰 {product.get('price', '未知')}</span>
+                        <span class="product-mall">🏪 {product.get('mall', '未知')}</span>
+                    </div>
+                    <div class="product-stats">
+                        👍 {product.get('worthy', 0)} 值 &nbsp; 👎 {product.get('unworthy', 0)} 不值 &nbsp; 💬 {product.get('comments', 0)} 评论
+                    </div>
+                    <a href="{product.get('url', '#')}" class="product-link" target="_blank">查看详情 →</a>
                 </div>
-                <div class="product-meta">
-                    <span class="product-price">💰 {product.get('price', '未知')}</span>
-                    <span class="product-mall">🏪 {product.get('mall', '未知')}</span>
-                </div>
-                <div class="product-stats">
-                    👍 {product.get('worthy', 0)} 值 &nbsp; 👎 {product.get('unworthy', 0)} 不值 &nbsp; 💬 {product.get('comments', 0)} 评论
-                </div>
-                <a href="{product.get('url', '#')}" class="product-link" target="_blank">查看详情 →</a>
             </div>
 """
         
-        # 底部批量反馈区
+        # 底部反馈区
         if feedback_email:
+            # 生成编号→商品名映射（用于回复邮件时参考）
+            mapping_lines = ''.join([
+                f'<li><b>{i}</b>. {p.get("title", "?")} (ID:{p.get("id", "?")})</li>'
+                for i, p in enumerate(products, 1)
+            ])
+            
+            # 生成回复模板：用户只需填写编号
+            reply_body = f"反馈编号示例（删除不需要的，保留喜欢/不喜欢的编号）%0A%0A好评：1,3,5%0A差评：2,4"
+            
             html += f"""
         </div>
         <div class="feedback-box">
             <h3>📧 这批推荐怎么样？</h3>
-            <p>点击按钮，系统会记录你的偏好，后续推荐会更精准</p>
-            <div class="feedback-btns">
-                <a href="mailto:{feedback_email}?subject=feedback:batch:{all_ids}:good&body=这批推荐不错，继续保持" class="fb fb-good">👍 都不错</a>
+            <p>整体反馈点下面，具体反馈往下翻</p>
+            
+            <div class="feedback-batch">
+                <a href="mailto:{feedback_email}?subject=feedback:batch:{all_ids}:good&body=这批推荐不错" class="fb fb-good">👍 都不错</a>
                 <a href="mailto:{feedback_email}?subject=feedback:batch:{all_ids}:bad&body=这批推荐不行" class="fb fb-bad">👎 都不行</a>
-                <a href="mailto:{feedback_email}?subject=feedback:batch:{all_ids}:mixed&body=部分有用部分没用" class="fb fb-partial">🤔 有好有坏</a>
+            </div>
+            
+            <div class="feedback-detail">
+                <p><b>📝 具体反馈</b> — 回复此邮件，写上编号即可：</p>
+                <ol>{mapping_lines}</ol>
+                <p>回复格式：<code>好评：1,3,5</code> &nbsp; <code>差评：2,4</code></p>
+                <a href="mailto:{feedback_email}?subject=feedback:detail:{all_ids}&body={reply_body}" class="fb-reply">✏️ 回复反馈</a>
             </div>
         </div>
 """

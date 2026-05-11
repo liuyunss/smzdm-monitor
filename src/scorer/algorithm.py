@@ -70,8 +70,8 @@ class Scorer:
         worthy = product.get('worthy', 0)
         unworthy = product.get('unworthy', 0)
 
-        # 最低互动门槛
-        total_engage = comments + collection + worthy
+        # 最低互动门槛（只看收藏+值，评论数据不可靠）
+        total_engage = collection + worthy
         if total_engage < 10:
             return 0
 

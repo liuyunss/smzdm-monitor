@@ -8,6 +8,8 @@
 import logging
 from typing import Dict
 
+_pref_instance = None
+
 logger = logging.getLogger(__name__)
 
 

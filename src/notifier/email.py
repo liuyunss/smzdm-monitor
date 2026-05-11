@@ -6,6 +6,8 @@ import smtplib
 import logging
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from email.header import Header
+from email.utils import formataddr
 from typing import List, Dict
 from datetime import datetime
 
@@ -174,7 +176,7 @@ class EmailNotifier:
         try:
             msg = MIMEMultipart('alternative')
             msg['Subject'] = subject
-            msg['From'] = f"{self.from_name} <{self.username}>"
+            msg['From'] = formataddr((Header(self.from_name, 'utf-8').encode(), self.username))
             msg['To'] = self.to_email
             
             msg.attach(MIMEText(html_content, 'html', 'utf-8'))

@@ -24,6 +24,11 @@ from typing import List, Dict
 
 logger = logging.getLogger(__name__)
 
+# 延迟导入避免循环依赖
+def _get_category_pref(db):
+    from src.scorer.preference import get_category_pref
+    return get_category_pref(db)
+
 
 class FeedbackParser:
     """邮件反馈解析器"""
@@ -105,10 +110,11 @@ class FeedbackParser:
                     self.db.save_feedback(fb['product_id'], fb['feedback_type'])
                     logger.info(f"记录反馈: {fb['product_id']} -> {fb['feedback_type']}")
             
-            # 写入设置
-            if self.db and settings:
+            # 写入设置（直接写入偏好表）
+            if settings:
                 for s in settings:
-                    self.db.save_category_pref(s['category'], s['value'])
+                    category_pref = _get_category_pref(self.db)
+                    category_pref.set_manual_pref(s['category'], s['value'])
                     logger.info(f"更新偏好: {s['category']} = {s['value']}")
             
             return feedbacks

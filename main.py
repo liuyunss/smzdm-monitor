@@ -58,6 +58,15 @@ def run_monitor():
         feedbacks = parser.check_and_parse()
         if feedbacks:
             logger.info(f"收到 {len(feedbacks)} 条反馈")
+            # 同步更新品类偏好统计
+            for fb in feedbacks:
+                product = db.get_product(fb['product_id'])
+                if product:
+                    # 从产品标题推断品类
+                    from src.scorer.category import tag_category
+                    category = tag_category(product.get('title', ''))
+                    category_pref.record_feedback(category, fb['feedback_type'])
+                    logger.info(f"品类统计: {category} += {fb['feedback_type']}")
         
         # 5. 初始化代理管理器
         proxy_config = config.get('proxy', default={})

@@ -72,10 +72,10 @@ scorer:
   min_age_hours: 1
   min_composite_score: 35
   weights:
-    comments: 3
+    comments: 1.5
     collection: 3
     worthy: 1.5
-    unworthy: -1.5
+    unworthy: -2
     price: 0.15
 
 storage:

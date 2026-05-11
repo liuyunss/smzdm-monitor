@@ -98,9 +98,16 @@ class Database:
                     product_id TEXT NOT NULL,
                     notified_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     notification_count INTEGER DEFAULT 1,
+                    notified_score REAL DEFAULT 0,
                     FOREIGN KEY (product_id) REFERENCES products(id)
                 )
             ''')
+
+            # 兼容旧数据库：添加 notified_score 列
+            try:
+                cursor.execute('ALTER TABLE notifications ADD COLUMN notified_score REAL DEFAULT 0')
+            except Exception:
+                pass
             
             # 反馈记录表
             cursor.execute('''
@@ -266,36 +273,47 @@ class Database:
             ''', (product_id,))
             return cursor.fetchone()['cnt']
     
-    def save_notification(self, product_id: str) -> bool:
-        """保存通知记录"""
+    def save_notification(self, product_id: str, current_score: float = 0) -> bool:
+        """保存通知记录，返回是否成功（False=已达上限或分数未增长）"""
         with self._get_conn() as conn:
             cursor = conn.cursor()
-            
-            # 检查已通知次数
+
+            # 获取最大通知次数和最新分数
             cursor.execute('''
-                SELECT COUNT(*) as count
-                FROM notifications 
+                SELECT MAX(notification_count) as max_count,
+                       notified_score
+                FROM notifications
                 WHERE product_id = ?
-            ''', (product_id,))
-            count = cursor.fetchone()['count']
-            
-            if count >= 2:  # 最多通知2次
-                return False
-            
+                AND notification_count = (SELECT MAX(notification_count) FROM notifications WHERE product_id = ?)
+            ''', (product_id, product_id))
+            row = cursor.fetchone()
+
+            if row and row['max_count']:
+                count = row['max_count']
+                last_score = row['notified_score'] or 0
+                if count >= 2:
+                    return False  # 已达上限
+                # 第二次推送：分数需增长 >=10 分
+                if current_score < last_score + 10:
+                    return False
+                count += 1
+            else:
+                count = 1
+
             cursor.execute('''
-                INSERT INTO notifications (product_id, notification_count)
-                VALUES (?, ?)
-            ''', (product_id, count + 1))
-            
+                INSERT INTO notifications (product_id, notification_count, notified_score)
+                VALUES (?, ?, ?)
+            ''', (product_id, count, current_score))
+
             return True
-    
+
     def get_notification_count(self, product_id: str) -> int:
         """获取已通知次数"""
         with self._get_conn() as conn:
             cursor = conn.cursor()
             cursor.execute('''
                 SELECT COALESCE(MAX(notification_count), 0) as count
-                FROM notifications 
+                FROM notifications
                 WHERE product_id = ?
             ''', (product_id,))
             return cursor.fetchone()['count']

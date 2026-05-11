@@ -127,11 +127,8 @@ def run_monitor():
 
             min_score = config.get('scorer', 'min_composite_score', default=35)
             if score >= min_score:
-                notification_count = db.get_notification_count(product['id'])
-                max_notifications = config.get('notifier', 'limits', 'max_notifications_per_item', default=2)
-                if notification_count < max_notifications:
+                if db.save_notification(product['id'], current_score=score):
                     scored_products.append(product)
-                    db.save_notification(product['id'])
 
         # 批量保存
         if to_save:

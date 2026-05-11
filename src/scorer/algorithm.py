@@ -75,6 +75,10 @@ class Scorer:
         if total_engage < 15:
             return 0
 
+        # 值是核心正向信号，值比收藏或评论低说明有问题
+        if worthy < collection or worthy < comments:
+            return 0
+
         # 加权互动值
         value = (
             comments * self.weight_comments +

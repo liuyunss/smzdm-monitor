@@ -24,7 +24,7 @@ class EmailNotifier:
         self.use_tls = self.config.get('use_tls', True)
         self.username = self.config.get('username', '')
         self.password = self.config.get('password', '')
-        self.from_name = self.config.get('from_name', 'SRZDM监控')
+        self.from_name = self.config.get('from_name', 'SMZDM监控')
         self.to_email = self.config.get('to_email', '')
     
     def send_notification(self, products: List[Dict], feedback_url: str = None) -> bool:

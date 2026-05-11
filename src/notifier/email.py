@@ -2,18 +2,13 @@
 邮件通知模块
 """
 import smtplib
-import json
 import logging
-import os
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from typing import List, Dict, Optional
+from typing import List, Dict
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
-
-DATA_DIR = './data'
-BATCH_FILE = os.path.join(DATA_DIR, 'batch_history.json')
 
 
 class EmailNotifier:
@@ -24,68 +19,29 @@ class EmailNotifier:
         self._load_config()
     
     def _load_config(self):
-        """加载邮件配置"""
         self.smtp_server = self.config.get('smtp_server', 'smtp.qq.com')
         self.smtp_port = self.config.get('smtp_port', 587)
         self.use_tls = self.config.get('use_tls', True)
         self.username = self.config.get('username', '')
         self.password = self.config.get('password', '')
-        self.from_name = self.config.get('from_name', 'SMZDM监控')
         self.to_email = self.config.get('to_email', '')
     
     def send_notification(self, products: List[Dict], feedback_email: str = None) -> bool:
-        """发送通知邮件"""
         if not products:
             return False
         
-        # 生成批次ID（时间戳后4位 + 商品数）
-        batch_id = datetime.now().strftime('%m%d%H%M') + f'-{len(products)}'
+        # 主题：编号:商品ID(简称) 用逗号连接
+        # 回复时主题自动继承，解析器直接从主题提取ID
+        subject_items = ','.join([
+            f'{i}:{p.get("id","?")}({p.get("title", "?")[:5]})'
+            for i, p in enumerate(products, 1)
+        ])
+        subject = f"【SMZDM好价】{subject_items} - {datetime.now().strftime('%m-%d %H:%M')}"
         
-        # 主题：带商品简称
-        short_titles = self._get_short_titles(products)
-        subject = f"【SMZDM好价】{short_titles} | {len(products)}件 - {datetime.now().strftime('%m-%d %H:%M')}"
-        
-        html_content = self._build_html(products, feedback_email, batch_id)
-        
-        # 保存批次信息
-        self._save_batch(batch_id, products)
-        
+        html_content = self._build_html(products, feedback_email)
         return self._send_email(subject, html_content)
     
-    def _get_short_titles(self, products: List[Dict], max_len: int = 30) -> str:
-        """获取商品简称（截断到合适长度）"""
-        titles = [p.get('title', '?')[:8] for p in products[:5]]
-        result = ','.join(titles)
-        if len(result) > max_len:
-            result = result[:max_len] + '...'
-        return result
-    
-    def _save_batch(self, batch_id: str, products: List[Dict]):
-        """保存批次信息"""
-        os.makedirs(DATA_DIR, exist_ok=True)
-        
-        # 加载历史
-        history = {}
-        if os.path.exists(BATCH_FILE):
-            with open(BATCH_FILE, 'r', encoding='utf-8') as f:
-                history = json.load(f)
-        
-        # 保留最近 20 个批次
-        if len(history) > 20:
-            keys = list(history.keys())
-            for k in keys[:len(keys) - 20]:
-                del history[k]
-        
-        history[batch_id] = [{
-            'id': p.get('id', ''),
-            'title': p.get('title', ''),
-        } for p in products]
-        
-        with open(BATCH_FILE, 'w', encoding='utf-8') as f:
-            json.dump(history, f, ensure_ascii=False, indent=2)
-    
-    def _build_html(self, products: List[Dict], feedback_email: str = None, batch_id: str = '') -> str:
-        """构建HTML邮件内容"""
+    def _build_html(self, products: List[Dict], feedback_email: str = None) -> str:
         all_ids = ','.join([p.get('id', '') for p in products])
         
         html = f"""
@@ -117,17 +73,15 @@ class EmailNotifier:
 
         .feedback-box {{ background: #f8f9fa; border: 2px solid #e9ecef; border-radius: 12px; padding: 24px; margin-top: 24px; }}
         .feedback-box h3 {{ margin: 0 0 8px 0; font-size: 16px; color: #333; text-align: center; }}
-        .feedback-box > p {{ margin: 0 0 16px 0; font-size: 13px; color: #666; text-align: center; }}
-        .feedback-batch {{ display: flex; justify-content: center; gap: 12px; margin-bottom: 20px; flex-wrap: wrap; }}
+        .feedback-box > p {{ margin: 0 0 12px 0; font-size: 13px; color: #666; text-align: center; }}
+        .feedback-batch {{ display: flex; justify-content: center; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }}
         .fb {{ display: inline-block; padding: 10px 20px; border-radius: 8px; text-decoration: none; font-size: 13px; font-weight: 600; }}
         .fb-good {{ background: #27ae60; color: white; }}
         .fb-bad {{ background: #e74c3c; color: white; }}
         
         .feedback-detail {{ border-top: 1px solid #dee2e6; padding-top: 16px; }}
-        .feedback-detail p {{ margin: 0 0 8px 0; font-size: 13px; color: #666; }}
         .feedback-detail ol {{ margin: 0 0 12px 0; padding-left: 20px; font-size: 13px; color: #333; }}
         .feedback-detail li {{ margin-bottom: 4px; }}
-        .fb-reply {{ display: inline-block; padding: 10px 20px; background: #6c757d; color: white; text-decoration: none; border-radius: 8px; font-size: 13px; font-weight: 600; }}
 
         .footer {{ text-align: center; padding: 20px; color: #999; font-size: 12px; }}
     </style>
@@ -141,7 +95,6 @@ class EmailNotifier:
         <div class="content">
 """
         
-        # 商品列表（带编号）
         for i, product in enumerate(products, 1):
             score = product.get('score', 0)
             score_class = 'score-high' if score >= 70 else 'score-medium' if score >= 40 else 'score-low'
@@ -166,15 +119,11 @@ class EmailNotifier:
             </div>
 """
         
-        # 底部反馈区
         if feedback_email:
             mapping_lines = ''.join([
                 f'<li><b>{i}</b>. {p.get("title", "?")}</li>'
                 for i, p in enumerate(products, 1)
             ])
-            
-            reply_body_lines = [f'{i}. {p.get("title", "?")}' for i, p in enumerate(products, 1)]
-            reply_body = '%0A'.join(reply_body_lines) + '%0A%0A好评：' + ','.join(str(i) for i in range(1, len(products)+1)) + '%0A差评：'
             
             html += f"""
         </div>
@@ -183,15 +132,14 @@ class EmailNotifier:
             <p>整体反馈点下面，具体反馈往下翻</p>
             
             <div class="feedback-batch">
-                <a href="mailto:{feedback_email}?subject=反馈:{batch_id}:good&body=这批推荐不错" class="fb fb-good">👍 都不错</a>
-                <a href="mailto:{feedback_email}?subject=反馈:{batch_id}:bad&body=这批推荐不行" class="fb fb-bad">👎 都不行</a>
+                <a href="mailto:{feedback_email}?subject=反馈:{all_ids}:good&body=这批推荐不错" class="fb fb-good">👍 都不错</a>
+                <a href="mailto:{feedback_email}?subject=反馈:{all_ids}:bad&body=这批推荐不行" class="fb fb-bad">👎 都不行</a>
             </div>
             
             <div class="feedback-detail">
-                <p><b>📝 具体反馈</b> — 点击下方按钮，编辑编号后发送：</p>
+                <p><b>📝 具体反馈</b> — 直接回复此邮件，正文写编号即可：</p>
                 <ol>{mapping_lines}</ol>
-                <p>回复格式：<code>好评 1,3,5</code> &nbsp; <code>差评 2,4</code></p>
-                <a href="mailto:{feedback_email}?subject=反馈:{batch_id}:detail&body={reply_body}" class="fb-reply">✏️ 回复反馈</a>
+                <p>格式：<code>好评 1,3</code> &nbsp; <code>差评 2,4</code></p>
             </div>
         </div>
 """
@@ -210,7 +158,6 @@ class EmailNotifier:
         return html
     
     def _send_email(self, subject: str, html_content: str) -> bool:
-        """发送邮件"""
         if not self.username or not self.password or not self.to_email:
             logger.warning("邮件配置不完整，跳过发送")
             return False
@@ -221,8 +168,7 @@ class EmailNotifier:
             msg['From'] = self.username
             msg['To'] = self.to_email
             
-            html_part = MIMEText(html_content, 'html', 'utf-8')
-            msg.attach(html_part)
+            msg.attach(MIMEText(html_content, 'html', 'utf-8'))
             
             server = smtplib.SMTP(self.smtp_server, self.smtp_port)
             if self.use_tls:
@@ -239,11 +185,10 @@ class EmailNotifier:
             return False
 
 
-# 全局通知器实例
+# 全局实例
 _notifier_instance = None
 
 def get_notifier(config: Dict) -> EmailNotifier:
-    """获取全局通知器"""
     global _notifier_instance
     if _notifier_instance is None:
         _notifier_instance = EmailNotifier(config)

@@ -15,6 +15,8 @@ from src.storage.database import get_db
 from src.proxy.manager import get_proxy_manager
 from src.crawler.smzdm import get_crawler
 from src.scorer.algorithm import get_scorer
+from src.scorer.category import tag_categories_batch
+from src.scorer.preference import get_category_pref
 from src.notifier.email import get_notifier
 from src.feedback.parser import get_feedback_parser
 
@@ -46,19 +48,23 @@ def run_monitor():
         db = get_db(db_path)
         logger.info("数据库初始化完成")
         
-        # 3. 检查邮件反馈（在初始化代理/爬虫之前，避免不必要的开销）
+        # 3. 初始化品类偏好
+        category_pref = get_category_pref(db)
+        logger.info("品类偏好初始化完成")
+        
+        # 4. 检查邮件反馈（含设置命令）
         logger.info("检查邮件反馈...")
         parser = get_feedback_parser(config, db)
         feedbacks = parser.check_and_parse()
         if feedbacks:
             logger.info(f"收到 {len(feedbacks)} 条反馈")
         
-        # 4. 初始化代理管理器
+        # 5. 初始化代理管理器
         proxy_config = config.get('proxy', default={})
         proxy_manager = get_proxy_manager(proxy_config)
         logger.info(f"代理管理器初始化完成，可用代理: {len(proxy_manager.proxies)} 个")
         
-        # 5. 初始化爬虫
+        # 6. 初始化爬虫
         crawler_config = {
             'items_per_page': config.get('monitor', 'items_per_page', default=20),
             'max_pages': config.get('monitor', 'max_pages', default=50),
@@ -67,20 +73,20 @@ def run_monitor():
         crawler = get_crawler(crawler_config, proxy_manager)
         logger.info("爬虫初始化完成")
         
-        # 6. 初始化评分器
+        # 7. 初始化评分器（带品类偏好）
         scorer_config = config.get('scorer', default={})
-        scorer = get_scorer(scorer_config)
+        scorer = get_scorer(scorer_config, category_pref)
         logger.info("评分器初始化完成")
         
-        # 7. 初始化通知器
+        # 8. 初始化通知器
         notifier_config = config.get('notifier', 'email', default={})
         notifier = get_notifier(notifier_config)
         logger.info("通知器初始化完成")
         
-        # 8. 获取过滤配置
+        # 9. 获取过滤配置
         filter_config = config.get('filter', default={})
         
-        # 9. 抓取商品
+        # 10. 抓取商品
         logger.info("开始抓取商品...")
         max_pages = config.get('monitor', 'max_pages', default=50)
         max_hours = config.get('monitor', 'max_history_hours', default=24)
@@ -91,12 +97,16 @@ def run_monitor():
             logger.warning("未抓取到任何商品")
             return
         
-        # 10. 过滤商品
+        # 11. 打品类标签
+        products = tag_categories_batch(products)
+        logger.info("品类标签完成")
+        
+        # 12. 过滤商品
         logger.info("开始过滤商品...")
         filtered_products = scorer.filter_products(products, filter_config)
         logger.info(f"过滤后剩余 {len(filtered_products)} 个商品")
         
-        # 11. 计算评分（基于互动增长）
+        # 13. 计算评分（基于互动增长 + 品类偏好）
         logger.info("开始计算评分...")
         scored_products = []
         first_run = True
@@ -124,7 +134,7 @@ def run_monitor():
         
         logger.info(f"筛选出 {len(scored_products)} 个高分商品")
         
-        # 12. 发送通知
+        # 14. 发送通知
         if first_run:
             logger.info("首次运行，已记录基线数据，下次运行将开始评分")
         elif scored_products:
@@ -143,7 +153,7 @@ def run_monitor():
         else:
             logger.info("没有需要通知的商品")
         
-        # 13. 清理旧数据
+        # 15. 清理旧数据
         if config.get('storage', 'auto_cleanup', default=True):
             retention_days = config.get('storage', 'retention_days', default=30)
             db.cleanup_old_data(retention_days)
@@ -156,24 +166,10 @@ def run_monitor():
     except Exception as e:
         logger.error(f"监控过程出错: {e}", exc_info=True)
 
-def run_feedback_server():
-    """运行反馈服务"""
-    config = get_config()
-    db_path = config.get('storage', 'db_path', default='./data/smzdm.db')
-    db = get_db(db_path)
-    
-    feedback_config = config.get('feedback', default={})
-    port = feedback_config.get('port', 5000)
-    
-    from src.feedback.service import get_feedback_service
-    service = get_feedback_service(feedback_config, db)
-    service.start(port=port)
-
 def main():
     """主函数"""
     parser = argparse.ArgumentParser(description='什么值得买好价监控系统')
     parser.add_argument('--monitor', action='store_true', help='运行监控')
-    parser.add_argument('--feedback', action='store_true', help='运行反馈服务')
     parser.add_argument('--config', type=str, help='配置文件路径')
     
     args = parser.parse_args()
@@ -181,10 +177,7 @@ def main():
     if args.config:
         reload_config(args.config)
     
-    if args.feedback:
-        run_feedback_server()
-    else:
-        run_monitor()
+    run_monitor()
 
 if __name__ == '__main__':
     main()

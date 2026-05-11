@@ -5,6 +5,7 @@
 1. 只对"有历史数据"的商品评分（至少运行过2次）
 2. 用互动增长率而非绝对值
 3. 太新的商品（<1h）不参与评分
+4. 品类偏好加权（根据用户反馈学习）
 """
 import logging
 from typing import List, Dict, Optional
@@ -12,67 +13,68 @@ from datetime import datetime, timedelta
 
 logger = logging.getLogger(__name__)
 
+
 class Scorer:
     """商品评分器"""
     
-    def __init__(self, config: Dict):
+    def __init__(self, config: Dict, category_pref=None):
         self.config = config
+        self.category_pref = category_pref
         self._load_config()
     
     def _load_config(self):
         """加载评分配置"""
         weights = self.config.get('weights', {})
-        self.weight_engagement_growth = weights.get('engagement_growth', 0.5)   # 互动增长权重
-        self.weight_absolute_engagement = weights.get('absolute_engagement', 0.3) # 绝对互动量权重
-        self.weight_price = weights.get('price', 0.2)                           # 价格优势权重
+        self.weight_engagement_growth = weights.get('engagement_growth', 0.5)
+        self.weight_absolute_engagement = weights.get('absolute_engagement', 0.3)
+        self.weight_price = weights.get('price', 0.2)
         
-        self.min_engagement_growth = self.config.get('min_engagement_growth', 5)   # 最小互动增长量
+        self.min_engagement_growth = self.config.get('min_engagement_growth', 5)
         self.min_composite_score = self.config.get('min_composite_score', 45)
-        self.min_age_hours = self.config.get('min_age_hours', 1)                  # 最小商品年龄（小时）
-        self.min_snapshots = self.config.get('min_snapshots', 2)                  # 最少快照数
+        self.min_age_hours = self.config.get('min_age_hours', 1)
+        self.min_snapshots = self.config.get('min_snapshots', 2)
     
-    def calculate_score(self, product: Dict, price_history: List[Dict] = None, 
+    def calculate_score(self, product: Dict, price_history: List[Dict] = None,
                         engagement_growth: Dict = None) -> float:
-        """计算商品综合评分
-        
-        Args:
-            product: 商品数据
-            price_history: 价格历史
-            engagement_growth: 互动增长数据 (来自 db.get_engagement_growth)
-        """
+        """计算商品综合评分（含品类偏好加权）"""
         # 太新的商品不评分
         age_hours = product.get('age_hours', 0)
         if age_hours < self.min_age_hours:
             return 0
         
-        # 没有增长数据的不评分（首次运行）
+        # 没有增长数据的不评分
         if not engagement_growth or engagement_growth.get('snapshots', 0) < self.min_snapshots:
             return 0
         
-        # 计算各维度得分
+        # 计算基础分
         growth_score = self._calc_growth_score(engagement_growth)
         absolute_score = self._calc_absolute_score(engagement_growth.get('curr', {}))
         price_score = self._calc_price_score(product, price_history)
         
-        # 加权计算总分
-        total_score = (
+        base_score = (
             growth_score * self.weight_engagement_growth +
             absolute_score * self.weight_absolute_engagement +
             price_score * self.weight_price
         )
         
-        # 增长量门槛：增长太少的降分
+        # 增长量门槛
         total_growth = engagement_growth.get('total_growth', 0)
         if total_growth < self.min_engagement_growth:
-            total_score *= 0.3
+            base_score *= 0.3
         
-        return round(total_score, 2)
+        # 品类偏好加权
+        if self.category_pref:
+            category = product.get('category', '其他')
+            weight = self.category_pref.get_pref_weight(category)
+            base_score *= weight
+            logger.debug(f"品类 {category} 权重: {weight}, 加权后: {base_score:.2f}")
+        
+        return round(base_score, 2)
     
     def _calc_growth_score(self, engagement_growth: Dict) -> float:
         """计算互动增长得分（0-100）"""
         growth = engagement_growth.get('growth', {})
         
-        # 增长公式：评论*2 + 收藏*1.5 + 值*1 - 不值*0.5
         growth_value = (
             growth.get('comments', 0) * 2 +
             growth.get('collection', 0) * 1.5 +
@@ -80,7 +82,6 @@ class Scorer:
             growth.get('unworthy', 0) * 0.5
         )
         
-        # 归一化到0-100
         if growth_value >= 100:
             return 100
         elif growth_value >= 50:
@@ -105,7 +106,6 @@ class Scorer:
         worthy = curr.get('worthy', 0)
         unworthy = curr.get('unworthy', 0)
         
-        # 热度公式
         popularity = comments * 2 + collection * 1.5 + worthy * 1 - unworthy * 0.5
         
         if popularity >= 500:
@@ -126,7 +126,7 @@ class Scorer:
     def _calc_price_score(self, product: Dict, price_history: List[Dict] = None) -> float:
         """计算价格优势得分（0-100）"""
         if not price_history or len(price_history) < 2:
-            return 50  # 没有历史数据，给中等分
+            return 50
         
         try:
             current_price = self._parse_price(product.get('price', ''))
@@ -143,7 +143,7 @@ class Scorer:
             if min_price > 0:
                 ratio = current_price / min_price
                 if ratio <= 1.0:
-                    return 100  # 历史最低
+                    return 100
                 elif ratio <= 1.05:
                     return 80
                 elif ratio <= 1.1:
@@ -186,12 +186,10 @@ class Scorer:
         filtered = []
         
         for product in products:
-            # 白名单优先
             if self._is_whitelisted(product, whitelist_keywords, whitelist_ids):
                 filtered.append(product)
                 continue
             
-            # 黑名单过滤
             if self._is_blacklisted(product, blacklist_keywords, blacklist_ids, blacklist_malls):
                 continue
             
@@ -200,7 +198,6 @@ class Scorer:
         return filtered
     
     def _is_whitelisted(self, product: Dict, keywords: List[str], ids: List[str]) -> bool:
-        """检查是否白名单"""
         if product.get('id') in ids:
             return True
         title = product.get('title', '').lower()
@@ -210,7 +207,6 @@ class Scorer:
         return False
     
     def _is_blacklisted(self, product: Dict, keywords: List[str], ids: List[str], malls: List[str]) -> bool:
-        """检查是否黑名单"""
         if product.get('id') in ids:
             return True
         if product.get('mall') in malls:
@@ -225,9 +221,8 @@ class Scorer:
 # 全局评分器实例
 _scorer_instance = None
 
-def get_scorer(config: Dict) -> Scorer:
-    """获取全局评分器实例"""
+def get_scorer(config: Dict, category_pref=None) -> Scorer:
     global _scorer_instance
     if _scorer_instance is None:
-        _scorer_instance = Scorer(config)
+        _scorer_instance = Scorer(config, category_pref)
     return _scorer_instance

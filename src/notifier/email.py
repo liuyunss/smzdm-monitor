@@ -30,20 +30,17 @@ class EmailNotifier:
         if not products:
             return False
         
-        # 主题：编号:商品ID(简称) 用逗号连接
-        # 回复时主题自动继承，解析器直接从主题提取ID
+        # 主题：编号:商品ID(简称)
         subject_items = ','.join([
             f'{i}:{p.get("id","?")}({p.get("title", "?")[:5]})'
             for i, p in enumerate(products, 1)
         ])
         subject = f"【SMZDM好价】{subject_items} - {datetime.now().strftime('%m-%d %H:%M')}"
         
-        html_content = self._build_html(products, feedback_email)
+        html_content = self._build_html(products)
         return self._send_email(subject, html_content)
     
-    def _build_html(self, products: List[Dict], feedback_email: str = None) -> str:
-        all_ids = ','.join([p.get('id', '') for p in products])
-        
+    def _build_html(self, products: List[Dict]) -> str:
         html = f"""
 <!DOCTYPE html>
 <html>
@@ -70,18 +67,16 @@ class EmailNotifier:
         .score-high {{ background: #27ae60; color: white; }}
         .score-medium {{ background: #f39c12; color: white; }}
         .score-low {{ background: #95a5a6; color: white; }}
+        .category {{ display: inline-block; padding: 1px 6px; background: #e9ecef; color: #666; border-radius: 3px; font-size: 11px; margin-left: 6px; }}
 
-        .feedback-box {{ background: #f8f9fa; border: 2px solid #e9ecef; border-radius: 12px; padding: 24px; margin-top: 24px; }}
-        .feedback-box h3 {{ margin: 0 0 8px 0; font-size: 16px; color: #333; text-align: center; }}
-        .feedback-box > p {{ margin: 0 0 12px 0; font-size: 13px; color: #666; text-align: center; }}
-        .feedback-batch {{ display: flex; justify-content: center; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }}
-        .fb {{ display: inline-block; padding: 10px 20px; border-radius: 8px; text-decoration: none; font-size: 13px; font-weight: 600; }}
-        .fb-good {{ background: #27ae60; color: white; }}
-        .fb-bad {{ background: #e74c3c; color: white; }}
-        
-        .feedback-detail {{ border-top: 1px solid #dee2e6; padding-top: 16px; }}
-        .feedback-detail ol {{ margin: 0 0 12px 0; padding-left: 20px; font-size: 13px; color: #333; }}
-        .feedback-detail li {{ margin-bottom: 4px; }}
+        .guide {{ background: #f8f9fa; border: 2px solid #e9ecef; border-radius: 12px; padding: 24px; margin-top: 24px; }}
+        .guide h3 {{ margin: 0 0 16px 0; font-size: 16px; color: #333; }}
+        .guide-section {{ margin-bottom: 16px; }}
+        .guide-section h4 {{ margin: 0 0 8px 0; font-size: 14px; color: #555; }}
+        .guide-section p {{ margin: 0 0 8px 0; font-size: 13px; color: #666; }}
+        .guide-section code {{ background: #e9ecef; padding: 2px 6px; border-radius: 3px; font-size: 12px; }}
+        .guide-example {{ background: white; border: 1px solid #dee2e6; border-radius: 6px; padding: 12px; margin: 8px 0; font-size: 13px; color: #333; font-family: 'SF Mono', Monaco, monospace; white-space: pre-wrap; }}
+        .guide-tip {{ background: #fff3cd; border: 1px solid #ffc107; border-radius: 6px; padding: 10px 12px; margin-top: 12px; font-size: 12px; color: #856404; }}
 
         .footer {{ text-align: center; padding: 20px; color: #999; font-size: 12px; }}
     </style>
@@ -98,6 +93,8 @@ class EmailNotifier:
         for i, product in enumerate(products, 1):
             score = product.get('score', 0)
             score_class = 'score-high' if score >= 70 else 'score-medium' if score >= 40 else 'score-low'
+            category = product.get('category', '')
+            category_html = f'<span class="category">{category}</span>' if category else ''
             
             html += f"""
             <div class="product">
@@ -106,6 +103,7 @@ class EmailNotifier:
                     <div class="product-title">
                         {product.get('title', '未知商品')}
                         <span class="score {score_class}">{score:.0f}分</span>
+                        {category_html}
                     </div>
                     <div class="product-meta">
                         <span class="product-price">💰 {product.get('price', '未知')}</span>
@@ -119,34 +117,44 @@ class EmailNotifier:
             </div>
 """
         
-        if feedback_email:
-            mapping_lines = ''.join([
-                f'<li><b>{i}</b>. {p.get("title", "?")}</li>'
-                for i, p in enumerate(products, 1)
-            ])
-            
-            html += f"""
-        </div>
-        <div class="feedback-box">
-            <h3>📧 这批推荐怎么样？</h3>
-            <p>整体反馈点下面，具体反馈往下翻</p>
-            
-            <div class="feedback-batch">
-                <a href="mailto:{feedback_email}?subject=反馈:{all_ids}:good&body=这批推荐不错" class="fb fb-good">👍 都不错</a>
-                <a href="mailto:{feedback_email}?subject=反馈:{all_ids}:bad&body=这批推荐不行" class="fb fb-bad">👎 都不行</a>
-            </div>
-            
-            <div class="feedback-detail">
-                <p><b>📝 具体反馈</b> — 直接回复此邮件，正文写编号即可：</p>
-                <ol>{mapping_lines}</ol>
-                <p>格式：<code>好评 1,3</code> &nbsp; <code>差评 2,4</code></p>
-            </div>
-        </div>
-"""
-        else:
-            html += "</div>"
-        
         html += f"""
+        </div>
+        <div class="guide">
+            <h3>📬 如何使用</h3>
+            
+            <div class="guide-section">
+                <h4>1. 商品反馈</h4>
+                <p>回复此邮件，正文写上编号即可：</p>
+                <div class="guide-example">好评 1,2,5
+差评 3,4</div>
+                <p>支持范围写法：</p>
+                <div class="guide-example">好评 1-5
+差评 6-10
+好评 1-3,8,10-15</div>
+            </div>
+            
+            <div class="guide-section">
+                <h4>2. 设置品类偏好</h4>
+                <p>通过邮件调整推荐权重，系统会自动学习：</p>
+                <div class="guide-example">设置：母婴 -100
+设置：数码 +50
+设置：零食 0</div>
+                <p>值范围 <code>-100</code> 到 <code>+100</code>，负数降权，正数加权</p>
+            </div>
+            
+            <div class="guide-section">
+                <h4>3. 组合使用</h4>
+                <p>一封邮件可以同时反馈商品 + 调整偏好：</p>
+                <div class="guide-example">好评 1-3
+差评 4-5
+设置：母婴 -100
+设置：数码 +30</div>
+            </div>
+            
+            <div class="guide-tip">
+                💡 系统会根据你的反馈自动学习品类偏好，反馈越多推荐越精准
+            </div>
+        </div>
         <div class="footer">
             <p>📊 由 SMZDM 好价监控系统自动发送 | {datetime.now().strftime('%Y-%m-%d %H:%M')}</p>
         </div>

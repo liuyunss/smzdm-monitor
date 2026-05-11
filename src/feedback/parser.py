@@ -1,14 +1,18 @@
 """
 邮件反馈解析模块
 
-从回复邮件的主题和正文解析反馈。
+从回复邮件的主题和正文解析反馈和设置命令。
 
-主题格式（自动继承）:
-  回复：【SMZDM好价】1:商品A,2:商品B,3:商品C - 05-11 09:38
-
-正文格式:
+反馈格式:
   好评 1,2
+  好评 1-5
   差评 3
+  好评 1-3,5,8-10
+
+设置格式:
+  设置：母婴 -100
+  设置：数码 +50
+  设置：零食 0
 """
 import imaplib
 import email
@@ -44,6 +48,7 @@ class FeedbackParser:
             return []
         
         feedbacks = []
+        settings = []
         
         try:
             mail = imaplib.IMAP4_SSL(self.imap_server, self.imap_port)
@@ -73,25 +78,38 @@ class FeedbackParser:
                 body = self._get_body(msg)
                 from_addr = msg.get('From', '')
                 
-                # 只处理来自自己邮箱的回复
                 if self.username not in from_addr:
                     self._processed_uids.add(msg_id)
                     continue
                 
+                # 解析设置命令
+                parsed_settings = self._parse_settings(body)
+                settings.extend(parsed_settings)
+                
+                # 解析商品反馈
                 parsed = self._parse(subject, body)
                 if parsed:
                     feedbacks.extend(parsed)
                     logger.info(f"解析到 {len(parsed)} 条反馈")
                 
+                if parsed_settings:
+                    logger.info(f"解析到 {len(parsed_settings)} 条设置")
+                
                 self._processed_uids.add(msg_id)
             
             mail.logout()
             
-            # 写入数据库
+            # 写入反馈
             if self.db and feedbacks:
                 for fb in feedbacks:
                     self.db.save_feedback(fb['product_id'], fb['feedback_type'])
                     logger.info(f"记录反馈: {fb['product_id']} -> {fb['feedback_type']}")
+            
+            # 写入设置
+            if self.db and settings:
+                for s in settings:
+                    self.db.save_category_pref(s['category'], s['value'])
+                    logger.info(f"更新偏好: {s['category']} = {s['value']}")
             
             return feedbacks
             
@@ -101,18 +119,15 @@ class FeedbackParser:
     
     def _parse(self, subject: str, body: str) -> List[Dict]:
         """从主题提取编号→ID映射，从正文提取反馈"""
-        
-        # 1. 从主题提取编号→ID映射
-        # 匹配: 1:商品名,2:商品名 或 反馈:id1,id2:good
         id_map = self._extract_id_map(subject)
         if not id_map:
             return []
         
-        # 2. 从正文提取好评/差评编号
-        good_indices = self._extract_indices(body, r'好评[：: ]*\s*([\d,\s，]+)')
-        bad_indices = self._extract_indices(body, r'差评[：: ]*\s*([\d,\s，]+)')
+        # 从正文提取好评/差评编号（支持 1-5 范围写法）
+        good_indices = self._extract_indices(body, r'好评[：: ]*\s*([\d,\s，\-]+)')
+        bad_indices = self._extract_indices(body, r'差评[：: ]*\s*([\d,\s，\-]+)')
         
-        # 3. 批量模式（都不错/都不行）
+        # 批量模式
         if not good_indices and not bad_indices:
             if '反馈' in subject:
                 if ':good' in subject:
@@ -141,15 +156,31 @@ class FeedbackParser:
         
         return results
     
-    def _extract_id_map(self, subject: str) -> Dict[int, str]:
-        """从主题提取编号→商品ID映射
+    def _parse_settings(self, body: str) -> List[Dict]:
+        """解析设置命令
         
-        主题格式: 回复：【SMZDM好价】1:300001(AirPod),2:300002(键盘) - 05-11 09:38
-        或: 反馈:300001,300002,300003:good
-        
-        返回: {1: '300001', 2: '300002', ...}
+        格式: 设置：品类 值
+        示例: 设置：母婴 -100
+              设置：数码 +50
         """
-        # 方式1: 按钮格式 反馈:id1,id2,id3:good/bad/detail
+        results = []
+        # 匹配 设置：xxx +/-数字 或 设置：xxx 数字
+        pattern = r'设置[：:]\s*(\S+)\s+([+-]?\d+)'
+        for match in re.finditer(pattern, body):
+            category = match.group(1)
+            value = int(match.group(2))
+            # 限制范围 -100 到 +100
+            value = max(-100, min(100, value))
+            results.append({
+                'category': category,
+                'value': value,
+                'timestamp': datetime.now().isoformat(),
+            })
+        return results
+    
+    def _extract_id_map(self, subject: str) -> Dict[int, str]:
+        """从主题提取编号→商品ID映射"""
+        # 方式1: 按钮格式
         btn_match = re.search(r'反馈[:：]([^:：\s]+)', subject)
         if btn_match:
             ids_str = btn_match.group(1)
@@ -157,7 +188,6 @@ class FeedbackParser:
             return {i+1: pid for i, pid in enumerate(ids)}
         
         # 方式2: 编号:商品ID(简称) 格式
-        # 匹配 1:300001(AirPod),2:300002(键盘)
         pairs = re.findall(r'(\d+):(\d+)\([^)]*\)', subject)
         if pairs:
             return {int(num): pid for num, pid in pairs}
@@ -192,10 +222,31 @@ class FeedbackParser:
         return body
     
     def _extract_indices(self, text: str, pattern: str) -> List[int]:
+        """从文本中提取编号，支持范围写法 1-5,1,3,8-10"""
         match = re.search(pattern, text)
         if not match:
             return []
-        return [int(n) for n in re.findall(r'\d+', match.group(1)) if n]
+        
+        nums_str = match.group(1)
+        indices = []
+        
+        # 先按逗号/空格分割
+        parts = re.split(r'[,，\s]+', nums_str.strip())
+        for part in parts:
+            part = part.strip()
+            if not part:
+                continue
+            
+            # 检查是否为范围 1-5
+            range_match = re.match(r'(\d+)\s*-\s*(\d+)', part)
+            if range_match:
+                start = int(range_match.group(1))
+                end = int(range_match.group(2))
+                indices.extend(range(start, end + 1))
+            elif re.match(r'^\d+$', part):
+                indices.append(int(part))
+        
+        return indices
 
 
 # 全局实例

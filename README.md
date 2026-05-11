@@ -17,8 +17,8 @@
 ### 1. 安装依赖
 
 ```bash
-git clone https://github.com/liuyunss/srzdm-monitor.git
-cd srzdm-monitor
+git clone https://github.com/liuyunss/smzdm-monitor.git
+cd smzdm-monitor
 pip install -r requirements.txt
 ```
 
@@ -51,7 +51,7 @@ python main.py --feedback
 ```bash
 crontab -e
 # 添加：每30分钟运行一次
-*/30 * * * * cd /opt/data/home/srzdm-monitor && python main.py --monitor >> logs/cron.log 2>&1
+*/30 * * * * cd /opt/data/home/smzdm-monitor && python main.py --monitor >> logs/cron.log 2>&1
 ```
 
 ## 📊 评分算法
@@ -79,7 +79,7 @@ crontab -e
 ## 📁 项目结构
 
 ```
-srzdm-monitor/
+smzdm-monitor/
 ├── src/
 │   ├── config/         # 配置加载模块
 │   ├── storage/        # 数据库存储模块
@@ -162,4 +162,4 @@ MIT License
 ## 🔗 相关链接
 
 - [什么值得买](https://www.smzdm.com/)
-- [GitHub仓库](https://github.com/liuyunss/srzdm-monitor)
+- [GitHub仓库](https://github.com/liuyunss/smzdm-monitor)

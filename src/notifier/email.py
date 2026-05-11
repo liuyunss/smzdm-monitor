@@ -137,7 +137,7 @@ class EmailNotifier:
             # 创建邮件
             msg = MIMEMultipart('alternative')
             msg['Subject'] = subject
-            msg['From'] = f"{self.from_name} <{self.username}>"
+            msg['From'] = self.username
             msg['To'] = self.to_email
             
             # 添加HTML内容

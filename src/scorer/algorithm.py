@@ -2,10 +2,9 @@
 评分算法模块
 
 核心逻辑：
-1. 只对"有历史数据"的商品评分（至少运行过2次）
-2. 用互动增长率而非绝对值
-3. 太新的商品（<1h）不参与评分
-4. 品类偏好加权（根据用户反馈学习）
+1. 基于当前互动量直接评分（评论/收藏/值/不值）
+2. 结合价格优势
+3. 品类偏好加权（根据用户反馈学习）
 """
 import logging
 import re
@@ -16,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 
 class Scorer:
-    """商品评分器"""
+    """商品评分器（基于绝对互动量）"""
     
     def __init__(self, config: Dict, category_pref=None):
         self.config = config
@@ -26,106 +25,71 @@ class Scorer:
     def _load_config(self):
         """加载评分配置"""
         weights = self.config.get('weights', {})
-        self.weight_engagement_growth = weights.get('engagement_growth', 0.5)
-        self.weight_absolute_engagement = weights.get('absolute_engagement', 0.3)
-        self.weight_price = weights.get('price', 0.2)
+        self.weight_comments = weights.get('comments', 3)
+        self.weight_collection = weights.get('collection', 2)
+        self.weight_worthy = weights.get('worthy', 1)
+        self.weight_unworthy = weights.get('unworthy', -0.5)
+        self.weight_price = weights.get('price', 0.15)
         
-        self.min_engagement_growth = self.config.get('min_engagement_growth', 5)
-        self.min_composite_score = self.config.get('min_composite_score', 45)
+        self.min_composite_score = self.config.get('min_composite_score', 35)
         self.min_age_hours = self.config.get('min_age_hours', 1)
-        self.min_snapshots = self.config.get('min_snapshots', 2)
     
-    def calculate_score(self, product: Dict, price_history: List[Dict] = None,
-                        engagement_growth: Dict = None) -> float:
+    def calculate_score(self, product: Dict, price_history: List[Dict] = None) -> float:
         """计算商品综合评分（含品类偏好加权）"""
         # 太新的商品不评分
         age_hours = product.get('age_hours', 0)
         if age_hours < self.min_age_hours:
             return 0
         
-        # 没有增长数据的不评分
-        if not engagement_growth or engagement_growth.get('snapshots', 0) < self.min_snapshots:
-            return 0
+        # 互动量得分（0-100）
+        engagement_score = self._calc_engagement_score(product)
         
-        # 计算基础分
-        growth_score = self._calc_growth_score(engagement_growth)
-        absolute_score = self._calc_absolute_score(engagement_growth.get('curr', {}))
+        # 价格优势得分（0-100）
         price_score = self._calc_price_score(product, price_history)
         
+        # 综合分 = 互动量 * 85% + 价格 * 15%
         base_score = (
-            growth_score * self.weight_engagement_growth +
-            absolute_score * self.weight_absolute_engagement +
+            engagement_score * (1 - self.weight_price) +
             price_score * self.weight_price
         )
-        
-        # 增长量门槛
-        total_growth = engagement_growth.get('total_growth', 0)
-        if total_growth < self.min_engagement_growth:
-            base_score *= 0.3
         
         # 品类偏好加权
         if self.category_pref:
             category = product.get('category', '其他')
             weight = self.category_pref.get_pref_weight(category)
             base_score *= weight
-            logger.debug(f"品类 {category} 权重: {weight}, 加权后: {base_score:.2f}")
         
         return round(base_score, 2)
     
-    def _calc_growth_score(self, engagement_growth: Dict) -> float:
-        """计算互动增长得分（0-100）"""
-        growth = engagement_growth.get('growth', {})
+    def _calc_engagement_score(self, product: Dict) -> float:
+        """计算互动量得分（0-100）"""
+        comments = product.get('comments', 0)
+        collection = product.get('collection', 0)
+        worthy = product.get('worthy', 0)
+        unworthy = product.get('unworthy', 0)
         
-        growth_value = (
-            growth.get('comments', 0) * 2 +
-            growth.get('collection', 0) * 1.5 +
-            growth.get('worthy', 0) * 1 -
-            growth.get('unworthy', 0) * 0.5
+        # 加权互动值
+        value = (
+            comments * self.weight_comments +
+            collection * self.weight_collection +
+            worthy * self.weight_worthy +
+            unworthy * self.weight_unworthy
         )
         
-        if growth_value >= 100:
-            return 100
-        elif growth_value >= 50:
-            return 85
-        elif growth_value >= 20:
-            return 70
-        elif growth_value >= 10:
-            return 55
-        elif growth_value >= 5:
-            return 40
-        elif growth_value >= 2:
-            return 25
-        elif growth_value >= 1:
-            return 15
-        else:
+        if value <= 0:
             return 0
-    
-    def _calc_absolute_score(self, curr: Dict) -> float:
-        """计算绝对互动量得分（0-100）"""
-        comments = curr.get('comments', 0)
-        collection = curr.get('collection', 0)
-        worthy = curr.get('worthy', 0)
-        unworthy = curr.get('unworthy', 0)
         
-        popularity = comments * 2 + collection * 1.5 + worthy * 1 - unworthy * 0.5
-        
-        if popularity >= 500:
-            return 100
-        elif popularity >= 200:
-            return 80
-        elif popularity >= 100:
-            return 60
-        elif popularity >= 50:
-            return 40
-        elif popularity >= 20:
-            return 25
-        elif popularity >= 5:
-            return 15
-        else:
-            return 5
+        # 非线性映射：对数缩放，避免头部商品分太高
+        import math
+        log_val = math.log1p(value)
+        # log_val 范围大约 0~8（value 0~3000）
+        score = min(100, log_val * 14)
+        return round(score, 1)
     
     def _calc_price_score(self, product: Dict, price_history: List[Dict] = None) -> float:
-        """计算价格优势得分（0-100）"""
+        """计算价格优势得分（0-100）
+        没有历史价格时默认给 50 分（中性）
+        """
         if not price_history or len(price_history) < 2:
             return 50
         
@@ -216,7 +180,6 @@ class Scorer:
             if keyword.lower() in title:
                 return True
         return False
-
 
 # 全局评分器实例
 _scorer_instance = None

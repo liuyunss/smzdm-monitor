@@ -1,0 +1,12 @@
+services:
+  smzdm:
+    build: .
+    container_name: smzdm-monitor
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./config.yaml:/app/config.yaml
+      - ./data:/app/data
+      - ./logs:/app/logs
+    environment:
+      - TZ=Asia/Shanghai

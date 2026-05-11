@@ -25,9 +25,10 @@ venv/
 env/
 ENV/
 
-# 数据库和日志
-data/*.db
-logs/*.log
+# 敏感配置
+config.yaml
+.env
+*.env
 
 # IDE
 .vscode/
@@ -42,8 +43,3 @@ Thumbs.db
 # 临时文件
 *.tmp
 *.bak
-
-# 敏感配置（含密钥、授权码等）
-config.yaml
-.env
-*.env

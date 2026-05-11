@@ -14,6 +14,7 @@
   设置：数码 +50
   设置：零食 0
 """
+import os
 import imaplib
 import email
 from email.header import decode_header
@@ -42,8 +43,9 @@ class FeedbackParser:
     def _load_config(self):
         self.imap_server = self.config.get('imap_server', 'imap.qq.com')
         self.imap_port = self.config.get('imap_port', 993)
-        self.username = self.config.get('username', '')
-        self.password = self.config.get('password', '')
+        # 优先读环境变量（Docker/.env），再读配置文件
+        self.username = os.environ.get('SMTP_USERNAME') or self.config.get('username', '')
+        self.password = os.environ.get('SMTP_PASSWORD') or self.config.get('password', '')
         self.folder = self.config.get('feedback_folder', 'INBOX')
         self._processed_uids = set()
     

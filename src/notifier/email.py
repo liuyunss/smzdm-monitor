@@ -1,6 +1,7 @@
 """
 邮件通知模块
 """
+import os
 import smtplib
 import logging
 from email.mime.text import MIMEText
@@ -22,9 +23,10 @@ class EmailNotifier:
         self.smtp_server = self.config.get('smtp_server', 'smtp.qq.com')
         self.smtp_port = self.config.get('smtp_port', 587)
         self.use_tls = self.config.get('use_tls', True)
-        self.username = self.config.get('username', '')
-        self.password = self.config.get('password', '')
-        self.to_email = self.config.get('to_email', '')
+        # 优先读环境变量（Docker/.env），再读配置文件
+        self.username = os.environ.get('SMTP_USERNAME') or self.config.get('username', '')
+        self.password = os.environ.get('SMTP_PASSWORD') or self.config.get('password', '')
+        self.to_email = os.environ.get('SMTP_TO') or self.config.get('to_email', '')
     
     def send_notification(self, products: List[Dict]) -> bool:
         if not products:
@@ -85,7 +87,7 @@ class EmailNotifier:
     <div class="container">
         <div class="header">
             <h1>🎯 什么值得买好价提醒</h1>
-            <p>发现 {len(products)} 个互动增长热门商品</p>
+            <p>发现 {len(products)} 个高互动热门商品</p>
         </div>
         <div class="content">
 """

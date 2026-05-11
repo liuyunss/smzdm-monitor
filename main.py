@@ -15,9 +15,9 @@ from src.storage.database import get_db
 from src.proxy.manager import get_proxy_manager
 from src.crawler.smzdm import get_crawler
 from src.scorer.algorithm import get_scorer
-from src.scorer.category import tag_categories_batch
+from src.scorer.category import tag_categories_batch, tag_category
 from src.scorer.preference import get_category_pref
-from src.notifier.email import get_notifier
+from src.notifier.email import EmailNotifier
 from src.feedback.parser import get_feedback_parser
 
 # 设置日志
@@ -54,7 +54,7 @@ def run_monitor():
         
         # 4. 检查邮件反馈（含设置命令）
         logger.info("检查邮件反馈...")
-        parser = get_feedback_parser(config, db)
+        parser = get_feedback_parser(config.get('notifier', 'email', default=None) or {}, db)
         feedbacks = parser.check_and_parse()
         if feedbacks:
             logger.info(f"收到 {len(feedbacks)} 条反馈")
@@ -63,13 +63,13 @@ def run_monitor():
                 product = db.get_product(fb['product_id'])
                 if product:
                     # 从产品标题推断品类
-                    from src.scorer.category import tag_category
+                    category = tag_category(product.get("title", ""))
                     category = tag_category(product.get('title', ''))
                     category_pref.record_feedback(category, fb['feedback_type'])
                     logger.info(f"品类统计: {category} += {fb['feedback_type']}")
         
         # 5. 初始化代理管理器
-        proxy_config = config.get('proxy', default={})
+        proxy_config = config.get('proxy', default=None) or {}
         proxy_manager = get_proxy_manager(proxy_config)
         logger.info(f"代理管理器初始化完成，可用代理: {len(proxy_manager.proxies)} 个")
         
@@ -83,17 +83,17 @@ def run_monitor():
         logger.info("爬虫初始化完成")
         
         # 7. 初始化评分器（带品类偏好）
-        scorer_config = config.get('scorer', default={})
+        scorer_config = config.get('scorer', default=None) or {}
         scorer = get_scorer(scorer_config, category_pref)
         logger.info("评分器初始化完成")
         
         # 8. 初始化通知器
-        notifier_config = config.get('notifier', 'email', default={})
-        notifier = get_notifier(notifier_config)
+        notifier_config = config.get('notifier', 'email', default=None) or {}
+        notifier = EmailNotifier(notifier_config)
         logger.info("通知器初始化完成")
         
         # 9. 获取过滤配置
-        filter_config = config.get('filter', default={})
+        filter_config = config.get('filter', default=None) or {}
         
         # 10. 抓取商品
         logger.info("开始抓取商品...")

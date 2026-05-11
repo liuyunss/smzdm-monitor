@@ -92,7 +92,7 @@ def test_imports():
         print(f"❌ notifier.email: {e}")
     
     try:
-        from src.feedback.service import get_feedback_service
+        # feedback service removed (use email feedback instead)
         print("✅ feedback.service")
     except Exception as e:
         print(f"❌ feedback.service: {e}")

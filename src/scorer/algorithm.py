@@ -153,22 +153,17 @@ class Scorer:
         return (worthy / total) * 100
     
     def _parse_price(self, price_str: str) -> Optional[float]:
-        """解析价格字符串"""
+        """解析价格字符串（支持 '6.9元', '¥6.9', '6.9元（需用券）' 等格式）"""
         if not price_str or price_str == '未知':
             return None
         
         try:
-            # 移除货币符号和空格
-            price_str = price_str.replace('¥', '').replace('￥', '').replace(' ', '')
-            
-            # 处理范围价格（如 "99-199"）
-            if '-' in price_str:
-                parts = price_str.split('-')
-                # 取最低价
-                return float(parts[0])
-            
-            return float(price_str)
-            
+            import re
+            # 提取第一个数字（含小数点）
+            match = re.search(r'[\d]+\.?\d*', price_str)
+            if match:
+                return float(match.group())
+            return None
         except (ValueError, IndexError):
             return None
     

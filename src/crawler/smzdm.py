@@ -33,10 +33,8 @@ class SmzdmCrawler:
     
     def fetch_deals(self, page: int = 1) -> Optional[List[Dict]]:
         """抓取好价商品"""
-        # API端点
         api_url = f'https://api.smzdm.com/v1/list?limit=20&offset={(page-1)*20}'
         
-        # 获取代理
         proxy = None
         if self.proxy_manager:
             proxy = self.proxy_manager.get_proxy()
@@ -44,86 +42,79 @@ class SmzdmCrawler:
         try:
             start_time = time.time()
             
-            # 发送请求
             if proxy:
-                response = self.session.get(
-                    api_url,
-                    proxies=proxy.dict,
-                    timeout=30
-                )
+                response = self.session.get(api_url, proxies=proxy.dict, timeout=30)
             else:
                 response = self.session.get(api_url, timeout=30)
             
             response_time = time.time() - start_time
             
-            # 代理成功
             if proxy and self.proxy_manager:
                 self.proxy_manager.on_success(proxy)
             
-            # 检查响应
             if response.status_code != 200:
                 logger.warning(f"HTTP {response.status_code}: {api_url}")
                 return None
             
-            # 解析JSON
             data = response.json()
-            if 'data' not in data:
-                logger.warning(f"无效响应格式: {api_url}")
+            
+            # API 返回格式: {data: {rows: [...], total_num: ...}}
+            rows = data.get('data', {}).get('rows', [])
+            if not rows:
+                logger.warning(f"无数据: {api_url}")
                 return None
             
-            # 解析商品列表
             products = []
-            items = data['data'] if isinstance(data['data'], list) else []
-            
-            for item in items:
+            for item in rows:
                 product = self._parse_item(item)
                 if product:
                     products.append(product)
             
-            logger.info(f"第{page}页: 获取{len(products)}个商品")
+            logger.info(f"第{page}页: 获取{len(products)}个商品 (耗时{response_time:.1f}s)")
             return products
             
         except requests.exceptions.RequestException as e:
             logger.error(f"请求失败: {e}")
-            
-            # 代理失败
             if proxy and self.proxy_manager:
                 self.proxy_manager.on_failure(proxy)
-            
             return None
     
     def _parse_item(self, item: Dict) -> Optional[Dict]:
         """解析商品数据"""
         try:
-            # 基础字段
             article_id = item.get('article_id')
             title = item.get('article_title', '').strip()
             price = item.get('article_price', '').strip()
             mall = item.get('article_mall', '').strip()
             url = item.get('article_url', '').strip()
             channel_type = item.get('article_channel_type', '').strip()
-            pub_time = item.get('article_format_date', '').strip()
             
-            # 验证必要字段
             if not article_id or not title:
                 return None
             
             # 解析互动数据
-            worthy = max(0, int(item.get('article_worthy', 0)))
-            unworthy = max(0, int(item.get('article_unworthy', 0)))
-            comments = max(0, int(item.get('article_comment', 0)))
+            worthy = max(0, int(item.get('article_worthy', 0) or 0))
+            unworthy = max(0, int(item.get('article_unworthy', 0) or 0))
+            comments = max(0, int(item.get('article_comment', 0) or 0))
+            collection = max(0, int(item.get('article_collection', 0) or 0))
             
-            # 解析 tongji_hudong 获取精确数据
+            # 优先从 tongji_hudong 获取精确数据
             tongji = self._parse_tongji_hudong(item.get('tongji_hudong', ''))
+            if tongji['worthy'] > 0:
+                worthy = tongji['worthy']
+            if tongji['unworthy'] > 0:
+                unworthy = tongji['unworthy']
+            if tongji['comments'] > 0:
+                comments = tongji['comments']
+            if tongji['collection'] > 0:
+                collection = tongji['collection']
             
-            # 计算商品年龄（小时）
+            # 计算商品年龄（小时）- 使用 publish_date_lt 时间戳
             age_hours = 0
-            if pub_time:
-                try:
-                    pub_dt = datetime.strptime(pub_time, '%Y-%m-%d %H:%M')
-                    age_hours = (datetime.now() - pub_dt).total_seconds() / 3600
-                except Exception:
-                    pass
+            pub_ts = item.get('publish_date_lt', '')
+            if pub_ts and str(pub_ts).isdigit():
+                pub_dt = datetime.fromtimestamp(int(pub_ts))
+                age_hours = (datetime.now() - pub_dt).total_seconds() / 3600
             
             return {
                 'id': str(article_id),
@@ -132,11 +123,11 @@ class SmzdmCrawler:
                 'mall': mall,
                 'url': url,
                 'channel_type': channel_type,
-                'pub_time': pub_time,
-                'comments': tongji['comments'] or comments,
-                'collection': tongji['collection'],
-                'worthy': tongji['worthy'] or worthy,
-                'unworthy': tongji['unworthy'] or unworthy,
+                'pub_time': item.get('article_format_date', ''),
+                'comments': comments,
+                'collection': collection,
+                'worthy': worthy,
+                'unworthy': unworthy,
                 'age_hours': age_hours,
             }
             
@@ -164,11 +155,9 @@ class SmzdmCrawler:
         all_products = []
         
         for page in range(1, max_pages + 1):
-            # 随机延迟
             delay = random.uniform(0.5, 1.5)
             time.sleep(delay)
             
-            # 抓取一页
             products = self.fetch_deals(page)
             if not products:
                 break
@@ -180,10 +169,10 @@ class SmzdmCrawler:
                     break
             
             all_products.extend(products)
-            
             logger.info(f"已抓取 {len(all_products)} 个商品")
         
         return all_products
+
 
 # 全局爬虫实例
 _crawler_instance = None

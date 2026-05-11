@@ -5,7 +5,6 @@ import os
 import sys
 import logging
 import argparse
-import threading
 from datetime import datetime
 
 # 添加项目根目录到路径
@@ -17,9 +16,9 @@ from src.proxy.manager import get_proxy_manager
 from src.crawler.smzdm import get_crawler
 from src.scorer.algorithm import get_scorer
 from src.notifier.email import get_notifier
-from src.feedback.service import get_feedback_service
 
 # 设置日志
+os.makedirs('logs', exist_ok=True)
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
@@ -89,35 +88,45 @@ def run_monitor():
         filtered_products = scorer.filter_products(products, filter_config)
         logger.info(f"过滤后剩余 {len(filtered_products)} 个商品")
         
-        # 10. 计算评分
+        # 10. 计算评分（基于互动增长）
         logger.info("开始计算评分...")
         scored_products = []
+        first_run = True  # 标记是否首次运行
+        
         for product in filtered_products:
-            # 获取价格历史
-            price_history = db.get_price_history(product['id'])
+            # 获取互动增长数据
+            engagement_growth = db.get_engagement_growth(product['id'])
             
-            # 计算评分
-            score = scorer.calculate_score(product, price_history)
-            product['score'] = score
-            
-            # 保存到数据库
+            # 保存商品（同时记录互动快照）
+            product['score'] = 0
             db.save_product(product)
             
-            # 筛选高分商品
-            min_score = config.get('scorer', 'min_composite_score', default=45)
-            if score >= min_score:
-                # 检查通知次数
-                notification_count = db.get_notification_count(product['id'])
-                max_notifications = config.get('notifier', 'limits', 'max_notifications_per_item', default=2)
+            # 如果有增长数据，说明不是首次运行
+            if engagement_growth:
+                first_run = False
                 
-                if notification_count < max_notifications:
-                    scored_products.append(product)
-                    db.save_notification(product['id'])
+                # 计算评分
+                price_history = db.get_price_history(product['id'])
+                score = scorer.calculate_score(product, price_history, engagement_growth)
+                product['score'] = score
+                
+                # 筛选高分商品
+                min_score = config.get('scorer', 'min_composite_score', default=45)
+                if score >= min_score:
+                    # 检查通知次数
+                    notification_count = db.get_notification_count(product['id'])
+                    max_notifications = config.get('notifier', 'limits', 'max_notifications_per_item', default=2)
+                    
+                    if notification_count < max_notifications:
+                        scored_products.append(product)
+                        db.save_notification(product['id'])
         
         logger.info(f"筛选出 {len(scored_products)} 个高分商品")
         
         # 11. 发送通知
-        if scored_products:
+        if first_run:
+            logger.info("首次运行，已记录基线数据，下次运行将开始评分")
+        elif scored_products:
             # 按评分排序
             scored_products.sort(key=lambda x: x.get('score', 0), reverse=True)
             
@@ -160,6 +169,7 @@ def run_feedback_server():
     feedback_config = config.get('feedback', default={})
     port = feedback_config.get('port', 5000)
     
+    from src.feedback.service import get_feedback_service
     service = get_feedback_service(feedback_config, db)
     service.start(port=port)
 
@@ -177,10 +187,8 @@ def main():
         reload_config(args.config)
     
     if args.feedback:
-        # 运行反馈服务
         run_feedback_server()
     else:
-        # 运行监控
         run_monitor()
 
 if __name__ == '__main__':

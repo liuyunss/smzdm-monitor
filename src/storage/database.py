@@ -70,6 +70,20 @@ class Database:
                 )
             ''')
             
+            # 互动数据历史表（核心：记录每次运行的互动快照）
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS engagement_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    product_id TEXT NOT NULL,
+                    comments INTEGER DEFAULT 0,
+                    collection INTEGER DEFAULT 0,
+                    worthy INTEGER DEFAULT 0,
+                    unworthy INTEGER DEFAULT 0,
+                    recorded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (product_id) REFERENCES products(id)
+                )
+            ''')
+            
             # 通知记录表
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS notifications (
@@ -140,6 +154,19 @@ class Database:
                     VALUES (?, ?)
                 ''', (product['id'], product['price']))
             
+            # 记录互动数据快照
+            cursor.execute('''
+                INSERT INTO engagement_history 
+                (product_id, comments, collection, worthy, unworthy)
+                VALUES (?, ?, ?, ?, ?)
+            ''', (
+                product['id'],
+                product.get('comments', 0),
+                product.get('collection', 0),
+                product.get('worthy', 0),
+                product.get('unworthy', 0)
+            ))
+            
             return True
     
     def get_product(self, product_id: str) -> Optional[Dict]:
@@ -173,6 +200,63 @@ class Database:
             ''', (product_id,))
             row = cursor.fetchone()
             return str(row['lowest_price']) if row and row['lowest_price'] else None
+    
+    def get_engagement_growth(self, product_id: str) -> Optional[Dict]:
+        """获取互动数据增长情况
+        
+        返回: {
+            'prev': {comments, collection, worthy, unworthy},
+            'curr': {comments, collection, worthy, unworthy},
+            'growth': {comments, collection, worthy, unworthy},
+            'total_growth': int,  # 总增长量
+            'snapshots': int      # 快照数量
+        }
+        """
+        with self._get_conn() as conn:
+            cursor = conn.cursor()
+            
+            # 获取所有快照（按时间排序）
+            cursor.execute('''
+                SELECT comments, collection, worthy, unworthy, recorded_at
+                FROM engagement_history 
+                WHERE product_id = ?
+                ORDER BY recorded_at ASC
+            ''', (product_id,))
+            snapshots = [dict(row) for row in cursor.fetchall()]
+            
+            if len(snapshots) < 2:
+                return None  # 至少需要2次快照才能计算增长
+            
+            prev = snapshots[0]
+            curr = snapshots[-1]
+            
+            growth = {
+                'comments': max(0, curr['comments'] - prev['comments']),
+                'collection': max(0, curr['collection'] - prev['collection']),
+                'worthy': max(0, curr['worthy'] - prev['worthy']),
+                'unworthy': max(0, curr['unworthy'] - prev['unworthy']),
+            }
+            
+            total_growth = sum(growth.values())
+            
+            return {
+                'prev': prev,
+                'curr': curr,
+                'growth': growth,
+                'total_growth': total_growth,
+                'snapshots': len(snapshots),
+            }
+    
+    def get_engagement_snapshot_count(self, product_id: str) -> int:
+        """获取商品的互动快照数量"""
+        with self._get_conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT COUNT(*) as cnt
+                FROM engagement_history 
+                WHERE product_id = ?
+            ''', (product_id,))
+            return cursor.fetchone()['cnt']
     
     def save_notification(self, product_id: str) -> bool:
         """保存通知记录"""
@@ -283,6 +367,12 @@ class Database:
                 WHERE recorded_at < ?
             ''', (since,))
             
+            # 清理旧互动历史
+            cursor.execute('''
+                DELETE FROM engagement_history 
+                WHERE recorded_at < ?
+            ''', (since,))
+            
             # 清理旧通知记录
             cursor.execute('''
                 DELETE FROM notifications 
@@ -294,6 +384,7 @@ class Database:
                 DELETE FROM proxy_usage 
                 WHERE used_at < ?
             ''', (since,))
+
 
 # 全局数据库实例
 _db_instance = None

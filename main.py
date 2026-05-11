@@ -54,6 +54,7 @@ def is_quiet_hours(config) -> bool:
 
 # 优雅退出
 _running = True
+_quiet_buffer = []  # 免打扰期间攒的待发商品
 def _signal_handler(sig, frame):
     global _running
     logger.info("收到退出信号，正在停止...")
@@ -134,6 +135,8 @@ def run_monitor():
         scored_products = []
         to_save = []
 
+        quiet = is_quiet_hours(config)
+
         for product in filtered_products:
             price_history = db.get_price_history(product['id'])
             score = scorer.calculate_score(product, price_history)
@@ -142,17 +145,29 @@ def run_monitor():
 
             min_score = config.get('scorer', 'min_composite_score', default=35)
             if score >= min_score:
-                if db.save_notification(product['id'], current_score=score):
-                    scored_products.append(product)
+                if quiet:
+                    # 免打扰：先不标记已通知，攒起来
+                    _quiet_buffer.append(product)
+                else:
+                    if db.save_notification(product['id'], current_score=score):
+                        scored_products.append(product)
 
         # 批量保存
         if to_save:
             db.save_products_batch(to_save)
 
+        # 免打扰结束时，把攒的一起发
+        if not quiet and _quiet_buffer:
+            logger.info(f"免打扰结束，推送攒的 {len(_quiet_buffer)} 件商品")
+            for product in _quiet_buffer:
+                if db.save_notification(product['id'], current_score=product.get('score', 0)):
+                    scored_products.append(product)
+            _quiet_buffer.clear()
+
         logger.info(f"筛选出 {len(scored_products)} 个高分商品")
 
-        # 发送通知（免打扰时段跳过）
-        if scored_products and not is_quiet_hours(config):
+        # 发送通知
+        if scored_products:
             scored_products.sort(key=lambda x: x.get('score', 0), reverse=True)
             max_items = config.get('notifier', 'limits', 'max_items_per_batch', default=20)
             scored_products = scored_products[:max_items]

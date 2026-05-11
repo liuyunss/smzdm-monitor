@@ -24,17 +24,23 @@ pip install -r requirements.txt
 
 ### 2. 配置系统
 
-编辑 `config.yaml`，填写邮箱配置：
-
-```yaml
-notifier:
-  email:
-    smtp_server: "smtp.qq.com"
-    smtp_port: 587
-    username: "your_email@qq.com"
-    password: "your_auth_code"
-    to_email: "target@email.com"
+```bash
+# 复制配置模板
+cp config.yaml.example config.yaml
+cp .env.example .env
 ```
+
+编辑 `.env` 填写敏感信息（邮箱授权码等）：
+
+```env
+SMZDM_EMAIL_USERNAME=your_email@qq.com
+SMZDM_EMAIL_PASSWORD=your_auth_code
+SMZDM_EMAIL_TO=recipient@qq.com
+```
+
+编辑 `config.yaml` 调整非敏感参数（评分权重、过滤规则等）。
+
+> ⚠️ `.env` 和 `config.yaml` 已在 `.gitignore` 中，不会被提交到 Git。
 
 ### 3. 运行监控
 
@@ -88,7 +94,10 @@ smzdm-monitor/
 │   ├── scorer/         # 评分算法模块
 │   ├── notifier/       # 通知模块
 │   └── feedback/       # 反馈服务模块
-├── config.yaml         # 配置文件
+├── config.yaml.example # 配置模板（提交到 Git）
+├── .env.example        # 环境变量模板（提交到 Git）
+├── config.yaml         # 实际配置（不提交）
+├── .env                # 敏感信息（不提交）
 ├── main.py             # 主入口
 └── requirements.txt    # 依赖
 ```
@@ -154,6 +163,13 @@ proxy:
 2. **代理质量**：免费代理不稳定，建议先测试可用性
 3. **API限制**：什么值得买API可能有访问频率限制
 4. **数据存储**：SQLite数据库文件在 `data/smzdm.db`
+
+## 🔐 安全说明
+
+- 敏感信息（授权码、密码）通过 `.env` 文件管理，**不要提交到 Git**
+- `config.yaml` 仅包含非敏感参数，可安全提交
+- 如果意外提交了密钥，应立即撤销并重新生成
+- 环境变量优先级高于 `config.yaml`，可用于 CI/CD 等场景
 
 ## 📄 License
 

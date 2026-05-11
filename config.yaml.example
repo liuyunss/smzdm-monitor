@@ -73,9 +73,9 @@ scorer:
   min_composite_score: 35
   weights:
     comments: 3
-    collection: 2
-    worthy: 1
-    unworthy: -0.5
+    collection: 3
+    worthy: 1.5
+    unworthy: -1.5
     price: 0.15
 
 storage:

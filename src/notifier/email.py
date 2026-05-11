@@ -26,7 +26,7 @@ class EmailNotifier:
         self.password = self.config.get('password', '')
         self.to_email = self.config.get('to_email', '')
     
-    def send_notification(self, products: List[Dict], feedback_email: str = None) -> bool:
+    def send_notification(self, products: List[Dict]) -> bool:
         if not products:
             return False
         
@@ -194,11 +194,4 @@ class EmailNotifier:
             return False
 
 
-# 全局实例
-_notifier_instance = None
 
-def get_notifier(config: Dict) -> EmailNotifier:
-    global _notifier_instance
-    if _notifier_instance is None:
-        _notifier_instance = EmailNotifier(config)
-    return _notifier_instance

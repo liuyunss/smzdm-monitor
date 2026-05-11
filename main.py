@@ -63,7 +63,6 @@ def run_monitor():
                 product = db.get_product(fb['product_id'])
                 if product:
                     # 从产品标题推断品类
-                    category = tag_category(product.get("title", ""))
                     category = tag_category(product.get('title', ''))
                     category_pref.record_feedback(category, fb['feedback_type'])
                     logger.info(f"品类统计: {category} += {fb['feedback_type']}")
@@ -119,12 +118,13 @@ def run_monitor():
         logger.info("开始计算评分...")
         scored_products = []
         first_run = True
+        to_save = []
         
         for product in filtered_products:
             engagement_growth = db.get_engagement_growth(product['id'])
             
             product['score'] = 0
-            db.save_product(product)
+            to_save.append(product)
             
             if engagement_growth:
                 first_run = False
@@ -141,6 +141,10 @@ def run_monitor():
                         scored_products.append(product)
                         db.save_notification(product['id'])
         
+        # 批量保存商品（单次连接）
+        if to_save:
+            db.save_products_batch(to_save)
+        
         logger.info(f"筛选出 {len(scored_products)} 个高分商品")
         
         # 14. 发送通知
@@ -152,9 +156,7 @@ def run_monitor():
             max_items = config.get('notifier', 'limits', 'max_items_per_batch', default=20)
             scored_products = scored_products[:max_items]
             
-            feedback_email = config.get('notifier', 'email', 'username', default='')
-            
-            success = notifier.send_notification(scored_products, feedback_email)
+            success = notifier.send_notification(scored_products)
             if success:
                 logger.info("通知发送成功")
             else:

@@ -8,6 +8,7 @@
 4. 品类偏好加权（根据用户反馈学习）
 """
 import logging
+import re
 from typing import List, Dict, Optional
 from datetime import datetime, timedelta
 
@@ -164,7 +165,6 @@ class Scorer:
             return None
         
         try:
-            import re
             match = re.search(r'[\d]+\.?\d*', price_str)
             if match:
                 return float(match.group())

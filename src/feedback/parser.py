@@ -21,6 +21,7 @@ import logging
 import re
 from datetime import datetime, timedelta
 from typing import List, Dict
+from src.scorer.category import tag_category
 
 logger = logging.getLogger(__name__)
 
@@ -111,7 +112,6 @@ class FeedbackParser:
                     category = None
                     product = self.db.get_product(fb['product_id'])
                     if product:
-                        from src.scorer.category import tag_category
                         category = tag_category(product.get('title', ''))
                     self.db.save_feedback(fb['product_id'], fb['feedback_type'], category)
                     fb['category'] = category

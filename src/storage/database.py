@@ -4,7 +4,7 @@ SQLite数据库存储模块
 import sqlite3
 import os
 from datetime import datetime, timedelta
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional
 from contextlib import contextmanager
 
 class Database:
@@ -362,6 +362,34 @@ class Database:
                 'fail': row['fail_count'] or 0,
                 'avg_time': row['avg_response_time'] or 0
             }
+    
+    def save_products_batch(self, products: List[Dict]):
+        """批量保存商品（单次连接）"""
+        with self._get_conn() as conn:
+            cursor = conn.cursor()
+            for product in products:
+                cursor.execute('''
+                    INSERT OR REPLACE INTO products 
+                    (id, title, price, mall, url, channel_type, comments, collection, worthy, unworthy, score, category, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                ''', (
+                    product['id'], product['title'], product.get('price', ''),
+                    product.get('mall', ''), product.get('url', ''),
+                    product.get('channel_type', ''), product.get('comments', 0),
+                    product.get('collection', 0), product.get('worthy', 0),
+                    product.get('unworthy', 0), product.get('score', 0),
+                    product.get('category', '')
+                ))
+                # 互动快照
+                cursor.execute('''
+                    INSERT INTO engagement_history 
+                    (product_id, comments, collection, worthy, unworthy)
+                    VALUES (?, ?, ?, ?, ?)
+                ''', (
+                    product['id'], product.get('comments', 0),
+                    product.get('collection', 0), product.get('worthy', 0),
+                    product.get('unworthy', 0)
+                ))
     
     def cleanup_old_data(self, days: int = 30):
         """清理旧数据"""

@@ -7,7 +7,7 @@ import logging
 import re
 import random
 from typing import List, Dict, Optional
-from datetime import datetime, timedelta
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -177,17 +177,6 @@ class SmzdmCrawler:
         return all_products
 
 
-# 全局爬虫实例
-_crawler_instance = None
-
 def get_crawler(config: Dict, proxy_manager=None) -> SmzdmCrawler:
-    """获取全局爬虫实例"""
-    global _crawler_instance
-    if _crawler_instance is None:
-        _crawler_instance = SmzdmCrawler(config, proxy_manager)
-    return _crawler_instance
-
-def reset_crawler():
-    """重置爬虫实例"""
-    global _crawler_instance
-    _crawler_instance = None
+    """创建爬虫实例"""
+    return SmzdmCrawler(config, proxy_manager)

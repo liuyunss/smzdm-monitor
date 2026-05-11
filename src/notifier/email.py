@@ -2,6 +2,7 @@
 邮件通知模块
 """
 import smtplib
+import json
 import logging
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -9,6 +10,10 @@ from typing import List, Dict, Optional
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
+
+# 最近一次发送的商品列表（用于解析自由回复中的编号）
+LAST_SENT_FILE = './data/last_sent_products.json'
+
 
 class EmailNotifier:
     """邮件通知器"""
@@ -35,7 +40,21 @@ class EmailNotifier:
         subject = f"【SMZDM好价】{len(products)} 个热门商品 - {datetime.now().strftime('%m-%d %H:%M')}"
         html_content = self._build_html(products, feedback_email)
         
+        # 保存商品列表（用于自由回复解析）
+        self._save_last_sent(products)
+        
         return self._send_email(subject, html_content)
+    
+    def _save_last_sent(self, products: List[Dict]):
+        """保存最近发送的商品列表"""
+        import os
+        os.makedirs('./data', exist_ok=True)
+        data = [{
+            'id': p.get('id', ''),
+            'title': p.get('title', ''),
+        } for p in products]
+        with open(LAST_SENT_FILE, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
     
     def _build_html(self, products: List[Dict], feedback_email: str = None) -> str:
         """构建HTML邮件内容"""
@@ -121,14 +140,14 @@ class EmailNotifier:
         
         # 底部反馈区
         if feedback_email:
-            # 生成编号→商品名映射（用于回复邮件时参考）
             mapping_lines = ''.join([
-                f'<li><b>{i}</b>. {p.get("title", "?")} (ID:{p.get("id", "?")})</li>'
+                f'<li><b>{i}</b>. {p.get("title", "?")}</li>'
                 for i, p in enumerate(products, 1)
             ])
             
-            # 生成回复模板：用户只需填写编号
-            reply_body = f"反馈编号示例（删除不需要的，保留喜欢/不喜欢的编号）%0A%0A好评：1,3,5%0A差评：2,4"
+            # 回复模板：用户只需填写编号，body 里带标题映射
+            reply_body_lines = [f'{i}. {p.get("title", "?")}' for i, p in enumerate(products, 1)]
+            reply_body = '%0A'.join(reply_body_lines) + '%0A%0A好评：' + ','.join(str(i) for i in range(1, len(products)+1)) + '%0A差评：'
             
             html += f"""
         </div>
@@ -142,9 +161,9 @@ class EmailNotifier:
             </div>
             
             <div class="feedback-detail">
-                <p><b>📝 具体反馈</b> — 回复此邮件，写上编号即可：</p>
+                <p><b>📝 具体反馈</b> — 点击下方按钮，编辑编号后发送：</p>
                 <ol>{mapping_lines}</ol>
-                <p>回复格式：<code>好评：1,3,5</code> &nbsp; <code>差评：2,4</code></p>
+                <p>回复格式：<code>好评 1,3,5</code> &nbsp; <code>差评 2,4</code></p>
                 <a href="mailto:{feedback_email}?subject=feedback:detail:{all_ids}&body={reply_body}" class="fb-reply">✏️ 回复反馈</a>
             </div>
         </div>

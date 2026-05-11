@@ -6,10 +6,13 @@
 支持格式:
   1. 批量: subject = feedback:batch:id1,id2,id3:good|bad
   2. 详细: subject = feedback:detail:id1,id2,... 
-           body 包含 "好评：1,3,5" "差评：2,4"（编号对应邮件中的商品顺序）
+           body 包含 "好评 1,3,5" 或 "好评：1,3,5"（编号对应邮件中的商品顺序）
+  3. 自由回复: subject 包含 "反馈" 关键词
+           body 包含 "好评 1,2" "差评 3" 等
 """
 import imaplib
 import email
+import json
 from email.header import decode_header
 import logging
 import re
@@ -69,10 +72,16 @@ class FeedbackParser:
                     continue
                 
                 msg = email.message_from_bytes(msg_data[0][1])
-                subject = self._decode_header(msg.get('Subject', ''))
+                subject = self._decode_subject(msg.get('Subject', ''))
                 body = self._get_body(msg)
+                from_addr = msg.get('From', '')
                 
-                # 尝试批量格式: feedback:batch:ids:good|bad
+                # 只处理来自自己邮箱的回复
+                if self.username not in from_addr:
+                    self._processed_uids.add(msg_id)
+                    continue
+                
+                # 1. 尝试批量格式: feedback:batch:ids:good|bad
                 parsed = self._parse_batch_subject(subject)
                 if parsed:
                     feedbacks.append(parsed)
@@ -80,13 +89,22 @@ class FeedbackParser:
                     self._processed_uids.add(msg_id)
                     continue
                 
-                # 尝试详细格式: feedback:detail:ids + body 解析
+                # 2. 尝试详细格式: feedback:detail:ids + body
                 parsed = self._parse_detail(subject, body)
                 if parsed:
                     feedbacks.extend(parsed)
                     logger.info(f"解析到详细反馈: {len(parsed)} 条")
                     self._processed_uids.add(msg_id)
                     continue
+                
+                # 3. 自由回复: subject 包含"反馈" + body 解析编号
+                if '反馈' in subject:
+                    parsed = self._parse_free_reply(body)
+                    if parsed:
+                        feedbacks.extend(parsed)
+                        logger.info(f"解析到自由反馈: {len(parsed)} 条")
+                        self._processed_uids.add(msg_id)
+                        continue
                 
                 self._processed_uids.add(msg_id)
             
@@ -150,7 +168,6 @@ class FeedbackParser:
         
         type_map = {'good': 'helpful', 'bad': 'not_helpful'}
         
-        # 批量格式：每个 ID 一条反馈
         return {
             'product_ids': product_ids,
             'feedback_type': type_map.get(feedback_type, feedback_type),
@@ -158,13 +175,7 @@ class FeedbackParser:
         }
     
     def _parse_detail(self, subject: str, body: str) -> List[Dict]:
-        """解析详细反馈: feedback:detail:id1,id2,... + body 中的编号
-        
-        body 格式示例:
-            好评：1,3,5
-            差评：2,4
-        """
-        # 从 subject 提取 ID 列表（按顺序）
+        """解析详细反馈: feedback:detail:id1,id2,... + body 中的编号"""
         pattern = r'feedback:detail:([^:\s]+)'
         match = re.search(pattern, subject, re.IGNORECASE)
         if not match:
@@ -175,16 +186,45 @@ class FeedbackParser:
         if not all_ids:
             return []
         
-        # 从 body 解析编号
-        good_indices = self._extract_indices(body, r'好评[：:]\s*([\d,\s]+)')
-        bad_indices = self._extract_indices(body, r'差评[：:]\s*([\d,\s]+)')
+        return self._parse_numbered_feedback(body, all_ids)
+    
+    def _parse_free_reply(self, body: str) -> List[Dict]:
+        """解析自由回复格式
+        
+        body 示例:
+            好评 1,2 差评 3
+            好评：1,3
+            差评：2,4
+        """
+        # 加载最近一次发送的商品列表
+        try:
+            with open('./data/last_sent_products.json', 'r', encoding='utf-8') as f:
+                last_sent = json.load(f)
+            all_ids = [item['id'] for item in last_sent]
+        except (FileNotFoundError, json.JSONDecodeError):
+            logger.warning("无法加载最近发送的商品列表，跳过自由回复解析")
+            return []
+        
+        return self._parse_numbered_feedback(body, all_ids)
+    
+    def _parse_numbered_feedback(self, body: str, all_ids: List[str]) -> List[Dict]:
+        """从 body 中解析编号反馈
+        
+        支持格式:
+            好评 1,3,5
+            好评：1,3,5
+            差评 2,4
+            差评：2,4
+        """
+        # 支持有无冒号
+        good_indices = self._extract_indices(body, r'好评[：: ]*\s*([\d,\s]+)')
+        bad_indices = self._extract_indices(body, r'差评[：: ]*\s*([\d,\s]+)')
         
         if not good_indices and not bad_indices:
             return []
         
         results = []
         
-        # 编号是 1-based，转成 0-based 索引
         for idx in good_indices:
             if 0 < idx <= len(all_ids):
                 results.append({

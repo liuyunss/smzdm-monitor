@@ -70,7 +70,7 @@ proxy:
 
 scorer:
   min_age_hours: 1
-  min_composite_score: 35
+  min_composite_score: 50
   weights:
     comments: 0.1
     collection: 3

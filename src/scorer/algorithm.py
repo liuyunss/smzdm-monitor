@@ -72,7 +72,7 @@ class Scorer:
 
         # 最低互动门槛（只看收藏+值，评论数据不可靠）
         total_engage = collection + worthy
-        if total_engage < 10:
+        if total_engage < 15:
             return 0
 
         # 加权互动值

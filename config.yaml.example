@@ -38,6 +38,8 @@ proxy:
 scorer:
   filters:
     min_worthy: 15  # 值≥此数才评分（核心门槛）
+    min_comments: 1  # 评论数≥此数才评分（0评论不推）
+    max_price: 30000  # 价格上限，0=不限制
   min_age_hours: 1
   min_composite_score: 50
   weights:

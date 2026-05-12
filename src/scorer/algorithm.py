@@ -38,9 +38,19 @@ class Scorer:
     def _load_filters(self):
         filters = self.config.get('filters', {}) if self.config else {}
         self.min_worthy = filters.get('min_worthy', 15)
+        self.min_comments = filters.get('min_comments', 1)
+        self.max_price = filters.get('max_price', 0)  # 0=不限制
     
     def calculate_score(self, product: Dict, price_history: List[Dict] = None) -> float:
         """计算商品综合评分（含品类偏好加权）"""
+        # 基础过滤
+        comments = product.get('comments', 0)
+        if comments < self.min_comments:
+            return 0
+        price = self._parse_price(product.get('price', ''))
+        if self.max_price > 0 and price is not None and price > self.max_price:
+            return 0
+
         # 太新的商品不评分
         age_hours = product.get('age_hours', 0)
         if age_hours < self.min_age_hours:

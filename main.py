@@ -219,10 +219,12 @@ def run_monitor():
             else:
                 logger.warning("通知发送失败")
 
-        # 清理旧数据
-        if config.get('storage', 'auto_cleanup', default=True):
+        # 每天凌晨4点清理旧数据（只跑一次）
+        now = datetime.now()
+        if config.get('storage', 'auto_cleanup', default=True) and now.hour == 4 and now.minute < 5:
             retention_days = config.get('storage', 'retention_days', default=30)
             db.cleanup_old_data(retention_days)
+            logger.info(f"清理{retention_days}天前的旧数据")
 
         logger.info("监控完成")
 

@@ -9,6 +9,7 @@ from email.mime.multipart import MIMEMultipart
 from email.header import Header
 from email.utils import formataddr
 from typing import List, Dict
+import time
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
@@ -167,38 +168,40 @@ class EmailNotifier:
         
         return html
     
-    def _send_email(self, subject: str, html_content: str) -> bool:
+    def _send_email(self, subject: str, html_content: str, max_retries: int = 2) -> bool:
         if not self.username or not self.password or not self.to_email:
             logger.error("邮件配置不完整，跳过发送")
             return False
-        
-        server = None
-        try:
-            msg = MIMEMultipart('alternative')
-            msg['Subject'] = subject
-            msg['From'] = formataddr((Header(self.from_name, 'utf-8').encode(), self.username))
-            msg['To'] = self.to_email
-            
-            msg.attach(MIMEText(html_content, 'html', 'utf-8'))
-            
-            server = smtplib.SMTP(self.smtp_server, self.smtp_port)
-            if self.use_tls:
-                server.starttls()
-            server.login(self.username, self.password)
-            server.sendmail(self.username, [self.to_email], msg.as_string())
-            
-            logger.info(f"邮件发送成功: {len(subject)} 字符")
-            return True
-            
-        except Exception as e:
-            logger.error(f"邮件发送失败: {e}")
-            return False
-        finally:
-            if server:
-                try:
-                    server.quit()
-                except Exception:
-                    pass
+
+        for attempt in range(max_retries + 1):
+            server = None
+            try:
+                msg = MIMEMultipart('alternative')
+                msg['Subject'] = subject
+                msg['From'] = formataddr((Header(self.from_name, 'utf-8').encode(), self.username))
+                msg['To'] = self.to_email
+                msg.attach(MIMEText(html_content, 'html', 'utf-8'))
+
+                server = smtplib.SMTP(self.smtp_server, self.smtp_port)
+                if self.use_tls:
+                    server.starttls()
+                server.login(self.username, self.password)
+                server.sendmail(self.username, [self.to_email], msg.as_string())
+
+                logger.info(f"邮件发送成功: {len(subject)} 字符")
+                return True
+
+            except Exception as e:
+                logger.error(f"邮件发送失败(第{attempt+1}次): {e}")
+                if attempt < max_retries:
+                    time.sleep(3)
+            finally:
+                if server:
+                    try:
+                        server.quit()
+                    except Exception:
+                        pass
+        return False
 
 
 

@@ -10,6 +10,7 @@ import sys
 import time
 import signal
 import logging
+import logging.handlers
 import argparse
 import json
 from datetime import datetime
@@ -20,24 +21,54 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from src.config.loader import get_config, reload_config
 from src.notifier.email import EmailNotifier
 from src.storage.database import get_db
-from src.proxy.manager import get_proxy_manager
 from src.crawler.smzdm import get_crawler
 from src.scorer.algorithm import get_scorer
 from src.scorer.category import tag_categories_batch, tag_category
 from src.scorer.preference import get_category_pref
 from src.feedback.parser import get_feedback_parser
 
-# 日志
+
+def setup_logging(config=None):
+    """配置日志（支持轮转）"""
+    os.makedirs('logs', exist_ok=True)
+    if config:
+        log_config = config.get('logging', default=None) or {}
+    else:
+        log_config = {}
+    level = getattr(logging, log_config.get('level', 'INFO').upper(), logging.INFO)
+    max_days = log_config.get('max_days', 30)
+    max_bytes = log_config.get('max_size_mb', 10) * 1024 * 1024
+
+    root_logger = logging.getLogger()
+    root_logger.setLevel(level)
+    root_logger.handlers.clear()
+
+    fmt = logging.Formatter('%(asctime)s [%(levelname)s] %(name)s: %(message)s')
+
+    # 控制台
+    sh = logging.StreamHandler()
+    sh.setFormatter(fmt)
+    root_logger.addHandler(sh)
+
+    # 文件（按天轮转，保留 max_days 天）
+    fh = logging.handlers.TimedRotatingFileHandler(
+        'logs/smzdm.log', when='midnight', backupCount=max_days, encoding='utf-8'
+    )
+    fh.setFormatter(fmt)
+    root_logger.addHandler(fh)
+
+    return logging.getLogger(__name__)
+
+
+# 初始日志（后续 setup_logging 会重新配置）
 os.makedirs('logs', exist_ok=True)
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
-    handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler('logs/smzdm.log', encoding='utf-8')
-    ]
-)
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# 优雅退出
+_running = True
+_QUIET_BUFFER_FILE = './data/quiet_buffer.json'
+
 
 def is_quiet_hours(config) -> bool:
     """检查当前是否在免打扰时段（北京时间）"""
@@ -53,9 +84,6 @@ def is_quiet_hours(config) -> bool:
     else:  # 跨午夜，如 23:00 ~ 06:00
         return current >= start or current <= end
 
-# 优雅退出
-_running = True
-_QUIET_BUFFER_FILE = './data/quiet_buffer.json'
 
 def _load_quiet_buffer():
     """从文件加载免打扰缓冲"""
@@ -67,16 +95,19 @@ def _load_quiet_buffer():
         pass
     return []
 
+
 def _save_quiet_buffer(buf):
-    """保存免打扰缓冲到文件（合并已有数据）"""
+    """保存免打扰缓冲到文件（合并去重）"""
     existing = _load_quiet_buffer()
     existing_ids = {p['id'] for p in existing}
     for item in buf:
         if item['id'] not in existing_ids:
             existing.append(item)
+            existing_ids.add(item['id'])
     os.makedirs(os.path.dirname(_QUIET_BUFFER_FILE), exist_ok=True)
     with open(_QUIET_BUFFER_FILE, 'w') as f:
         json.dump(existing, f)
+
 
 def _clear_quiet_buffer():
     """清空免打扰缓冲文件"""
@@ -84,13 +115,72 @@ def _clear_quiet_buffer():
         os.remove(_QUIET_BUFFER_FILE)
     except FileNotFoundError:
         pass
+
+
+def _cleanup_old_uids(days=30):
+    """清理 processed_uids.txt 中超过指定天数的旧记录"""
+    uid_file = './data/processed_uids.txt'
+    if not os.path.exists(uid_file):
+        return
+    try:
+        lines = open(uid_file, 'r').readlines()
+        cutoff = time.time() - days * 86400
+        kept = []
+        for line in lines:
+            parts = line.strip().split('|')
+            if len(parts) == 2:
+                try:
+                    ts = float(parts[1])
+                    if ts > cutoff:
+                        kept.append(line)
+                except ValueError:
+                    kept.append(line)
+            else:
+                kept.append(line)
+        with open(uid_file, 'w') as f:
+            f.writelines(kept)
+        logger.info(f"清理 processed_uids: {len(lines)} -> {len(kept)}")
+    except Exception as e:
+        logger.warning(f"清理 UID 文件失败: {e}")
+
+
 def _signal_handler(sig, frame):
     global _running
     logger.info("收到退出信号，正在停止...")
     _running = False
 
+
 signal.signal(signal.SIGINT, _signal_handler)
 signal.signal(signal.SIGTERM, _signal_handler)
+
+
+# 全局组件（daemon 模式下复用）
+_db = None
+_crawler = None
+_notifier = None
+
+
+def _init_components(config):
+    """初始化/更新全局组件"""
+    global _db, _crawler, _notifier
+
+    db_path = config.get('storage', 'db_path', default='./data/smzdm.db')
+    if _db is None:
+        _db = get_db(db_path)
+
+    if _crawler is None:
+        crawler_config = {
+            'items_per_page': config.get('monitor', 'items_per_page', default=20),
+            'max_pages': config.get('monitor', 'max_pages', default=50),
+            'target_minutes': config.get('monitor', 'target_minutes', default=30),
+        }
+        _crawler = get_crawler(crawler_config)
+
+    if _notifier is None:
+        notifier_config = config.get('notifier', 'email', default=None) or {}
+        _notifier = EmailNotifier(notifier_config)
+
+    return _db, _crawler, _notifier
 
 
 def run_monitor():
@@ -102,9 +192,7 @@ def run_monitor():
     notified = 0
     try:
         config = get_config()
-
-        db_path = config.get('storage', 'db_path', default='./data/smzdm.db')
-        db = get_db(db_path)
+        db, crawler, notifier = _init_components(config)
 
         category_pref = get_category_pref(db)
 
@@ -120,25 +208,9 @@ def run_monitor():
                     category = tag_category(product.get('title', ''))
                     category_pref.record_feedback(category, fb['feedback_type'])
 
-        # 代理
-        proxy_config = config.get('proxy', default=None) or {}
-        proxy_manager = get_proxy_manager(proxy_config)
-
-        # 爬虫
-        crawler_config = {
-            'items_per_page': config.get('monitor', 'items_per_page', default=20),
-            'max_pages': config.get('monitor', 'max_pages', default=50),
-            'target_minutes': config.get('monitor', 'target_minutes', default=30),
-        }
-        crawler = get_crawler(crawler_config, proxy_manager)
-
-        # 评分器
+        # 评分器（每轮重建以支持配置热更新）
         scorer_config = config.get('scorer', default=None) or {}
         scorer = get_scorer(scorer_config, category_pref)
-
-        # 通知器
-        notifier_config = config.get('notifier', 'email', default=None) or {}
-        notifier = EmailNotifier(notifier_config)
 
         # 过滤配置
         filter_config = config.get('filter', default=None) or {}
@@ -160,18 +232,19 @@ def run_monitor():
         filtered_products = scorer.filter_products(products, filter_config)
         logger.info(f"过滤后剩余 {len(filtered_products)} 个商品")
 
-        # 评分（基于绝对互动量，不再需要增长数据）
+        # 评分
         scored_products = []
         to_save = []
 
         quiet = is_quiet_hours(config)
         quiet_buffer = _load_quiet_buffer()
+        quiet_buffer_ids = {p['id'] for p in quiet_buffer}
 
         # 批量查询价格历史（避免 N+1）
         product_ids = [p['id'] for p in filtered_products]
         price_history_map = db.get_price_history_batch(product_ids)
-        
-        min_score = config.get('scorer', 'min_composite_score', default=35)
+
+        min_score = config.get('scorer', 'min_composite_score', default=50)
         for product in filtered_products:
             price_history = price_history_map.get(product['id'], [])
             score = scorer.calculate_score(product, price_history)
@@ -180,8 +253,9 @@ def run_monitor():
 
             if score >= min_score:
                 if quiet:
-                    # 免打扰：先不标记已通知，攒起来
-                    quiet_buffer.append(product)
+                    if product['id'] not in quiet_buffer_ids:
+                        quiet_buffer.append(product)
+                        quiet_buffer_ids.add(product['id'])
                 else:
                     if db.save_notification(product['id'], current_score=score):
                         scored_products.append(product)
@@ -190,11 +264,10 @@ def run_monitor():
         if to_save:
             db.save_products_batch(to_save)
 
-        # 免打扰结束时，把攒的一起发
-        # 保存 quiet buffer
+        # 免打扰缓冲处理
         if quiet and quiet_buffer:
             _save_quiet_buffer(quiet_buffer)
-        
+
         if not quiet and quiet_buffer:
             logger.info(f"免打扰结束，推送攒的 {len(quiet_buffer)} 件商品")
             for product in quiet_buffer:
@@ -207,7 +280,6 @@ def run_monitor():
         # 发送通知
         if scored_products:
             scored_products.sort(key=lambda x: x.get('score', 0), reverse=True)
-            # 免打扰批量推送不受限制，正常轮次限制 max_items
             if not quiet:
                 max_items = config.get('notifier', 'limits', 'max_items_per_batch', default=20)
                 scored_products = scored_products[:max_items]
@@ -219,12 +291,14 @@ def run_monitor():
             else:
                 logger.warning("通知发送失败")
 
-        # 每天凌晨4点清理旧数据（只跑一次）
+        # 每天凌晨4点清理旧数据 + 旧UID
         now = datetime.now()
-        if config.get('storage', 'auto_cleanup', default=True) and now.hour == 4 and now.minute < 5:
-            retention_days = config.get('storage', 'retention_days', default=30)
-            db.cleanup_old_data(retention_days)
-            logger.info(f"清理{retention_days}天前的旧数据")
+        if now.hour == 4 and now.minute < 5:
+            if config.get('storage', 'auto_cleanup', default=True):
+                retention_days = config.get('storage', 'retention_days', default=30)
+                db.cleanup_old_data(retention_days)
+                logger.info(f"清理{retention_days}天前的旧数据")
+            _cleanup_old_uids(days=30)
 
         logger.info("监控完成")
 
@@ -243,6 +317,11 @@ def main():
     if args.config:
         reload_config(args.config)
 
+    # 配置日志
+    config = get_config()
+    global logger
+    logger = setup_logging(config)
+
     if args.daemon:
         logger.info("启动守护进程模式")
         global _running
@@ -253,15 +332,14 @@ def main():
                     reload_config(args.config)
                 else:
                     reload_config()
+                config = get_config()
+                setup_logging(config)  # 日志配置也热更新
 
                 notified = run_monitor()
 
-                # 获取间隔（秒）
-                config = get_config()
                 interval = config.get('monitor', 'interval', default=300)
                 logger.info(f"本轮结束，{notified} 件商品通知，{interval}s 后执行下一轮")
 
-                # 分段 sleep，便于快速响应退出信号
                 for _ in range(interval):
                     if not _running:
                         break
@@ -269,7 +347,7 @@ def main():
 
             except Exception as e:
                 logger.error(f"守护进程异常: {e}", exc_info=True)
-                time.sleep(30)  # 异常后短暂等待
+                time.sleep(30)
     else:
         run_monitor()
 

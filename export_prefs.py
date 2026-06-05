@@ -14,7 +14,7 @@ import argparse
 
 from src.config.loader import get_config
 _config = get_config()
-DB_PATH = _config.get('storage', {}).get('db_path', './data/smzdm.db')
+DB_PATH = _config.get('storage', 'db_path', default='./data/smzdm.db')
 
 
 def export_preferences():

@@ -123,7 +123,8 @@ def _cleanup_old_uids(days=30):
     if not os.path.exists(uid_file):
         return
     try:
-        lines = open(uid_file, 'r').readlines()
+        with open(uid_file, 'r') as f:
+            lines = f.readlines()
         cutoff = time.time() - days * 86400
         kept = []
         for line in lines:

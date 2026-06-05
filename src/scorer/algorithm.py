@@ -205,11 +205,6 @@ class Scorer:
                 return True
         return False
 
-# 全局评分器实例
-_scorer_instance = None
-
+# 每次调用创建新实例，支持配置热更新
 def get_scorer(config: Dict, category_pref=None) -> Scorer:
-    global _scorer_instance
-    if _scorer_instance is None:
-        _scorer_instance = Scorer(config, category_pref)
-    return _scorer_instance
+    return Scorer(config, category_pref)

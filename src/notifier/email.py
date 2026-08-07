@@ -182,7 +182,7 @@ class EmailNotifier:
                 msg['To'] = self.to_email
                 msg.attach(MIMEText(html_content, 'html', 'utf-8'))
 
-                server = smtplib.SMTP(self.smtp_server, self.smtp_port)
+                server = smtplib.SMTP(self.smtp_server, self.smtp_port, timeout=15)
                 if self.use_tls:
                     server.starttls()
                 server.login(self.username, self.password)
